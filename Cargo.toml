@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = ["lueur-cli", "lueur-ebpf-programs"]
+default-members = ["lueur-cli"]
+
+[workspace.package]
+version = "0.5.0"
+edition = "2024"
+rust-version = "1.85"
+license-file = "LICENSE"
+repository = "https://github.com/rebound-how/rebound" 
+documentation = "https://lueur.dev" 
+homepage = "https://lueur.dev"
+include = [
+  "build.rs",
+  "src/**/*",
+  "Cargo.toml",
+  "Cargo.lock",
+  "LICENSE*",
+  "README.md",
+]
+
+
+[workspace.dependencies]
+which = { version = "7.0.2", default-features = false }
+anyhow = { version = "1", default-features = false }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.release.package.lueur-ebpf-programs]
+codegen-units = 1
+debug = 2

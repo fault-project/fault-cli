@@ -1,0 +1,28 @@
+[package]
+name = "lueur-ebpf-programs"
+authors = ["Sylvain Hellegouarch <sylvain@lueur.dev>"]
+description = "Lueur CLI" 
+keywords = ["lueur", "ebpf"]
+readme = "README.md"
+repository.workspace = true
+license-file.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+include.workspace = true
+version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]
+
+[dependencies]
+aya-ebpf = "0.1.1"
+aya-log-ebpf = "0.1.1"
+network-types = "0.0.7"
+
+[build-dependencies]
+which = { workspace = true }
+
+[[bin]]
+name = "lueur-ebpf"
+path = "src/main.rs"

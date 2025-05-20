@@ -1,0 +1,5 @@
+# Changes
+
+## Added
+
+- Improved documentation
