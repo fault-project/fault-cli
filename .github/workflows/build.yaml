@@ -1,0 +1,86 @@
+name: Build fault Binaries
+
+on: 
+  push:
+    branches:
+      - main
+    paths: 
+      - 'fault-cli'
+      - 'fault-ebpf-programs'
+      - '!CHANGELOG.md'
+      - '.github/workflows/build.yaml'
+
+jobs:
+  workspaces:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+
+    name: Build workspace on ${{ matrix.os }} / ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: |
+          rustup toolchain install nightly --component rust-src
+          rustup update nightly
+          rustup override set nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          workspaces: |
+            fault
+
+      - name: Install gRPC build dependencies (Linux)
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          sudo apt-get update
+          sudo apt install -y protobuf-compiler
+
+      - name: Install gRPC build dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install protoc --pre -y
+
+      - name: Install gRPC build dependencies (MacOSX)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install protobuf
+
+      - name: Check
+        run: cargo check
+        working-directory: ./fault-cli
+
+      - name: Build on Windows
+        if: matrix.os == 'windows-latest'
+        run: cargo +nightly build --verbose --target ${{ matrix.target }}
+        working-directory: ./fault-cli
+
+      - name: Build on Unix-like
+        if: matrix.os != 'windows-latest'
+        run: cargo +nightly build --verbose --target ${{ matrix.target }} --features agent
+        working-directory: ./fault-cli
+
+      - name: Build ebpf programs
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          cargo install bpf-linker --git https://github.com/aya-rs/bpf-linker.git
+          cargo +nightly build --verbose --target ${{ matrix.target }} --features stealth
+          cargo +nightly build \
+            --release \
+            -p fault-ebpf-programs \
+            --target=bpfel-unknown-none \
+            -Z build-std=core
+        working-directory: .
