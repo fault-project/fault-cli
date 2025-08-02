@@ -9,6 +9,7 @@ on:
       - release
     paths: 
       - 'Cargo.toml'
+      - '.github/workflows/release.yaml'
 
 jobs:
   extract-version:
