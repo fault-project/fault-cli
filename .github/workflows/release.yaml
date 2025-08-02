@@ -425,7 +425,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/rebound-how/fault
+          images: ghcr.io/fault-project/fault-cli
           tags: |
             type=semver,pattern={{version}},value=${{needs.extract-version.outputs.version}}
       
@@ -485,7 +485,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/rebound-how/fault
+          images: ghcr.io/fault-project/fault-cli
           flavor: |
             latest=false
             suffix=-stealth
