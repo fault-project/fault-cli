@@ -1,0 +1,8 @@
+target
+scripts
+docs
+.github
+.git
+deploy/installer
+deploy/k8s
+public
