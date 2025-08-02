@@ -517,6 +517,8 @@ jobs:
             EBPF_PREFIX_PATH=fault-assets/fault-ebpf-${{needs.extract-version.outputs.version}}
 
   publish-crates:
+    environment: release
+
     needs:
       - tag-release
     strategy:
@@ -561,6 +563,8 @@ jobs:
           CRATES_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   publish-ebpf-crates:
+    environment: release
+
     needs:
       - tag-release
     strategy:
