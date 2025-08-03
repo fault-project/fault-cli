@@ -26,7 +26,7 @@ Draw inspiration from the example good response below but don't copy it as-is.
     ## More Reliability Tests
 
     ```bash
-    # How a front-end handles “realistic” network jitter/latency
+    # How a front-end handles "realistic" network jitter/latency
     fault run \
         --upstream '*' \
         --with-latency \

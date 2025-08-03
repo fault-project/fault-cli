@@ -199,7 +199,7 @@ fn build_config_map(
     }
 }
 
-/// Build an intermediate “backend” Service that selects exactly the original
+/// Build an intermediate "backend" Service that selects exactly the original
 /// pods
 fn build_backend_service(original: &Resource, backend_name: &str) -> Service {
     // Pull the original ports & selector out of the Resource’s `content`

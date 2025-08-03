@@ -110,7 +110,7 @@ impl fmt::Display for ItemStatus {
 pub struct SloImpactRow {
     pub title: String,
     pub pass: bool,
-    /// e.g. “–150ms buffer” or “+40ms over threshold”
+    /// e.g. "–150ms buffer" or "+40ms over threshold"
     pub margin_text: String,
     /// Possibly how many calls are over threshold
     pub calls_over_threshold: usize,

@@ -31,7 +31,7 @@ Draw inspiration from the example good response below but don't copy it as-is.
 
     1. SQLite lock contention & resource exhaustion
     
-    * **Symptom mapping:** stair-step latency growth, periodic tail-latency pulses, “full black-hole” failures during write bursts
+    * **Symptom mapping:** stair-step latency growth, periodic tail-latency pulses, "full black-hole" failures during write bursts
     * **Hypothesis:** using file-based SQLite with the default pool means concurrent writes block readers. Under load, session commits serialize on the filesystem lock, causing long p95/p99 latencies and even timeouts when the lock persists.
     1. Missing retry logic on transient failures
     

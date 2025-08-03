@@ -37,7 +37,7 @@ pub enum InjectionHandle {
 /// Common interface for fault‐proxy injection on different platforms.
 #[async_trait]
 pub trait Platform {
-    /// List all “services” available for injection.
+    /// List all "services" available for injection.
     async fn discover(&self) -> Result<Vec<ServiceResource>>;
 
     /// Inject a proxy into the given service, returning a handle for rollback.
