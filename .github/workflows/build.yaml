@@ -4,11 +4,6 @@ on:
   push:
     branches:
       - main
-    paths: 
-      - 'fault-cli'
-      - 'fault-ebpf-programs'
-      - '!CHANGELOG.md'
-      - '.github/workflows/build.yaml'
 
 jobs:
   workspaces:
