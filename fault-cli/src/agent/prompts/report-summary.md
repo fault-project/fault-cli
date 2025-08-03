@@ -31,5 +31,5 @@ Draw inspiration from the example good response below but don't copy it as-is.
 ```markdown
     ## Overall Resilience Posture
 
-    The root (`/`) endpoint proved highly resilient—handling latency spikes, jitter, packet loss, bandwidth caps and injected HTTP errors with zero expectation failures and meeting all latency SLOs. In contrast, the `/users/{user_id}` endpoint broke under high-latency spikes, stair-step latency, packet loss and jitter, leading to status-code failures and missed P95 objectives, indicating that network-disturbance handling and timeout/retry logic need strengthening.
+    The root (`/`) endpoint proved highly resilient - handling latency spikes, jitter, packet loss, bandwidth caps and injected HTTP errors with zero expectation failures and meeting all latency SLOs. In contrast, the `/users/{user_id}` endpoint broke under high-latency spikes, stair-step latency, packet loss and jitter, leading to status-code failures and missed P95 objectives, indicating that network-disturbance handling and timeout/retry logic need strengthening.
 ```

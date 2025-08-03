@@ -803,7 +803,7 @@ pub async fn proxy_prelude(
     if disable_http_proxy {
         println!(
             "
-    Welcome to {} — {}!
+    Welcome to {} - {}!
 
     {}
 {}",
@@ -815,7 +815,7 @@ pub async fn proxy_prelude(
     } else {
         println!(
             "
-    Welcome to {} — {}!
+    Welcome to {} - {}!
 
     {}
      - {} {}

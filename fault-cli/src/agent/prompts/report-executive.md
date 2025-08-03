@@ -56,6 +56,6 @@ Draw inspiration from the example good response below but don't copy it as-is.
     * Retry count vs. success/failure rate
     * 504 rates and thread-pool utilization under load
 
-    By implementing these changes and validating them through targeted tests, we will significantly improve our API’s throughput, reliability, and predictability—while continuously monitoring to catch any unintended side effects.
+    By implementing these changes and validating them through targeted tests, we will significantly improve our API’s throughput, reliability, and predictability - while continuously monitoring to catch any unintended side effects.
 
 ```
