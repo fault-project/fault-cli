@@ -453,7 +453,7 @@ impl From<(LlmCase, &LlmOptions)> for FaultConfig {
                     case: LlmCase::InjectBias,
                     pattern: options.bias_pattern.clone(),
                     replacement: options.bias_replacement.clone(),
-                    instruction: None,
+                    instruction: options.instruction.clone(),
                     probability: options.probability,
                     kind: FaultKind::InjectBias,
                     direction: Direction::Ingress,
