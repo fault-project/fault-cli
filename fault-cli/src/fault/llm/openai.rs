@@ -421,6 +421,8 @@ fn mutate_request(
         }
     };
 
+    tracing::debug!("LLM request {}", doc);
+
     if path.starts_with("/v1/chat/completions")
         || path.starts_with("/api/v1/chat/completions")
         || path.starts_with("/v1beta/openai/chat/completions")
