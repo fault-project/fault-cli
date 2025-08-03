@@ -60,6 +60,9 @@ pub enum ProxyError {
 
     #[error("rust tls error: {0}")]
     TlsError(#[from] tokio_rustls::rustls::Error),
+
+    #[error("stream error: {0}")]
+    StreamError(#[from] Box<dyn std::error::Error + std::marker::Send + Sync>),
 }
 
 impl IntoResponse for ProxyError {
@@ -126,6 +129,10 @@ impl IntoResponse for ProxyError {
             ProxyError::TlsError(error) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json!({ "error": format!("Tls error: {}", error) }),
+            ),
+            ProxyError::StreamError(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": format!("Stream error: {}", error) }),
             ),
         };
 

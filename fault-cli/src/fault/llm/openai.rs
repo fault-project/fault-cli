@@ -2,6 +2,7 @@ use std::error::Error;
 use std::io::Cursor;
 use std::io::Result as IoResult;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 use std::time::Duration;
@@ -13,6 +14,7 @@ use futures::FutureExt;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use futures::ready;
+use futures::stream;
 use http::HeaderMap;
 use http::StatusCode;
 use hyper::body::Bytes;
@@ -27,6 +29,7 @@ use reqwest::Request as ReqwestRequest;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use serde_json::json;
 use tokio::io::AsyncRead;
 use tokio::io::ReadBuf;
 use tokio::time::Sleep;
@@ -219,8 +222,75 @@ impl FaultInjector for OpenAiInjector {
         status: StatusCode,
         headers: HeaderMap,
         body: BoxChunkStream,
-        _event: Box<dyn ProxyTaskEvent>,
+        event: Box<dyn ProxyTaskEvent>,
     ) -> Result<(StatusCode, HeaderMap, BoxChunkStream), ProxyError> {
+        if self.settings.side != StreamSide::Client {
+            return Ok((status, headers, body));
+        }
+
+        let direction = self.settings.direction.clone();
+        if !direction.is_ingress() {
+            return Ok((status, headers, body));
+        }
+
+        if let Some(instruction) = &self.settings.instruction {
+            if rand::random::<f64>() < self.settings.probability {
+                let _ = event.with_fault(FaultEvent::Llm {
+                    direction: Direction::Ingress,
+                    side: StreamSide::Client,
+                    case: self.settings.case,
+                });
+
+                let mut upstream = body;
+
+                // we need to peek at the first chunk because we need the
+                // chunk id and model
+                let first_chunk = match upstream.next().await {
+                    Some(Ok(bytes)) => bytes,
+                    Some(Err(e)) => return Err(e.into()),
+                    None => {
+                        return Ok((status, headers, upstream));
+                    }
+                };
+
+                // parse it to pull out `id` and `model`
+                let meta: Value = serde_json::from_slice(&first_chunk)
+                    .unwrap_or_else(|_| json!({}));
+                let id = meta.get("id").and_then(Value::as_str).unwrap_or("");
+                let model =
+                    meta.get("model").and_then(Value::as_str).unwrap_or("");
+
+                let payload = json!({
+                    "id":       id,
+                    "model":    model,
+                    "choices": [{ "delta": { "role": "system", "content": instruction }, "index": 0, "finish_reason": null }]
+                })
+                .to_string();
+                let mut framed = String::new();
+                for line in payload.lines() {
+                    framed.push_str("data: ");
+                    framed.push_str(line);
+                    framed.push('\n');
+                }
+                framed.push('\n');
+                let sys_bytes = Bytes::from(framed);
+
+                let new_stream =
+                    stream::iter(vec![Ok(sys_bytes), Ok(first_chunk)])
+                        .chain(upstream);
+
+                let boxed: BoxChunkStream = Box::pin(new_stream);
+
+                let _ = event.on_applied(FaultEvent::Llm {
+                    direction: Direction::Ingress,
+                    side: StreamSide::Client,
+                    case: self.settings.case,
+                });
+
+                return Ok((status, headers, boxed));
+            }
+        }
+
         Ok((status, headers, body))
     }
 

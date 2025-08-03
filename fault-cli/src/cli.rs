@@ -321,23 +321,47 @@ pub struct LlmOptions {
     pub slow_stream_mean_delay: Option<f64>,
 
     /// Regex pattern to scramble in prompt
-    #[clap(long, group = "prompt-scramble", help_heading = "Prompt Scramble", env = "FAULT_LLM_SCRAMBLE_PATTERN")]
+    #[clap(
+        long,
+        group = "prompt-scramble",
+        help_heading = "Prompt Scramble",
+        env = "FAULT_LLM_SCRAMBLE_PATTERN"
+    )]
     pub scramble_pattern: Option<String>,
 
     /// Substitute text for scramble
-    #[clap(long, group = "prompt-scramble", help_heading = "Prompt Scramble", env = "FAULT_LLM_SCRAMBLE_WITH")]
+    #[clap(
+        long,
+        group = "prompt-scramble",
+        help_heading = "Prompt Scramble",
+        env = "FAULT_LLM_SCRAMBLE_WITH"
+    )]
     pub scramble_with: Option<String>,
 
-    /// Instruction/System prompt to set on the request
-    #[clap(long, group = "prompt-scramble", help_heading = "Prompt Scramble", env = "FAULT_LLM_SCRAMBLE_INSTRUCTION")]
+    /// Instruction/System prompt to set on the request (scramble or bias)
+    #[clap(
+        long,
+        help_heading = "Prompt Scramble",
+        env = "FAULT_LLM_INSTRUCTION"
+    )]
     pub instruction: Option<String>,
 
     /// Regex pattern for bias
-    #[clap(long, group = "inject-bias", help_heading = "Inject Bias", env = "FAULT_LLM_BIAS_PATTERN")]
+    #[clap(
+        long,
+        group = "inject-bias",
+        help_heading = "Inject Bias",
+        env = "FAULT_LLM_BIAS_PATTERN"
+    )]
     pub bias_pattern: Option<String>,
 
     /// Substitute text for bias
-    #[clap(long, group = "inject-bias", help_heading = "Inject Bias", env = "FAULT_LLM_BIAS_REPLACEMENT")]
+    #[clap(
+        long,
+        group = "inject-bias",
+        help_heading = "Inject Bias",
+        env = "FAULT_LLM_BIAS_REPLACEMENT"
+    )]
     pub bias_replacement: Option<String>,
 }
 

@@ -210,6 +210,7 @@ impl ServiceHandler {
                     parts.headers = convert_headers_to_axum(&resp_headers);
 
                     if is_streaming(&resp_headers) {
+                        tracing::debug!("Handling HTTP request over SSE");
                         let raw = response.bytes_stream();
                         let mut stream: BoxChunkStream =
                             Box::pin(raw.map_err(|e| {
@@ -247,6 +248,7 @@ impl ServiceHandler {
 
                         return Ok(streamed_response);
                     } else {
+                        tracing::debug!("Handling HTTP request");
                         let resp_body_bytes =
                             response.bytes().await.map_err(|e| {
                                 tracing::error!(
