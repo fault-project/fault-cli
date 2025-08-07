@@ -323,7 +323,6 @@ pub struct LlmOptions {
     /// Regex pattern to scramble in prompt
     #[clap(
         long,
-        group = "prompt-scramble",
         help_heading = "Prompt Scramble",
         env = "FAULT_LLM_SCRAMBLE_PATTERN"
     )]
@@ -332,7 +331,6 @@ pub struct LlmOptions {
     /// Substitute text for scramble
     #[clap(
         long,
-        group = "prompt-scramble",
         help_heading = "Prompt Scramble",
         env = "FAULT_LLM_SCRAMBLE_WITH"
     )]
@@ -347,18 +345,12 @@ pub struct LlmOptions {
     pub instruction: Option<String>,
 
     /// Regex pattern for bias
-    #[clap(
-        long,
-        group = "inject-bias",
-        help_heading = "Inject Bias",
-        env = "FAULT_LLM_BIAS_PATTERN"
-    )]
+    #[clap(long, help_heading = "Inject Bias", env = "FAULT_LLM_BIAS_PATTERN")]
     pub bias_pattern: Option<String>,
 
     /// Substitute text for bias
     #[clap(
         long,
-        group = "inject-bias",
         help_heading = "Inject Bias",
         env = "FAULT_LLM_BIAS_REPLACEMENT"
     )]

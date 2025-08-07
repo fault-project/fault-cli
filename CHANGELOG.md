@@ -2,4 +2,6 @@
 
 ## Changed
 
-- Fix container registry
+- Fix a variety of minor bugs with LLM fault injection
+- Better SSE support
+

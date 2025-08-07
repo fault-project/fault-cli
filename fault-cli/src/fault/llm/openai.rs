@@ -3,6 +3,7 @@ use std::io::Cursor;
 use std::io::Result as IoResult;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::task::Context;
 use std::task::Poll;
 use std::time::Duration;
@@ -233,8 +234,8 @@ impl FaultInjector for OpenAiInjector {
             return Ok((status, headers, body));
         }
 
-        if let Some(instruction) = &self.settings.instruction {
-            if rand::random::<f64>() < self.settings.probability {
+        if rand::random::<f64>() < self.settings.probability {
+            if let Some(instruction) = &self.settings.instruction {
                 let _ = event.with_fault(FaultEvent::Llm {
                     direction: Direction::Ingress,
                     side: StreamSide::Client,
@@ -263,7 +264,7 @@ impl FaultInjector for OpenAiInjector {
                 let payload = json!({
                     "id":       id,
                     "model":    model,
-                    "choices": [{ "delta": { "role": "system", "content": instruction }, "index": 0, "finish_reason": null }]
+                    "choices": [{ "delta": { "role": "assistant", "content": instruction }, "index": 0, "finish_reason": null }]
                 })
                 .to_string();
                 let mut framed = String::new();
@@ -280,6 +281,28 @@ impl FaultInjector for OpenAiInjector {
                         .chain(upstream);
 
                 let boxed: BoxChunkStream = Box::pin(new_stream);
+
+                let _ = event.on_applied(FaultEvent::Llm {
+                    direction: Direction::Ingress,
+                    side: StreamSide::Client,
+                    case: self.settings.case,
+                });
+
+                return Ok((status, headers, boxed));
+            } else if let (Some(regex), Some(replacement)) =
+                (&self.regex, &self.settings.replacement)
+            {
+                let _ = event.with_fault(FaultEvent::Llm {
+                    direction: Direction::Ingress,
+                    side: StreamSide::Client,
+                    case: self.settings.case,
+                });
+
+                let regex = regex.clone();
+                let rep = replacement.clone();
+
+                let boxed: BoxChunkStream =
+                    rewrite_sse_stream(body, regex, rep);
 
                 let _ = event.on_applied(FaultEvent::Llm {
                     direction: Direction::Ingress,
@@ -491,7 +514,7 @@ fn mutate_request(
         }
     };
 
-    tracing::debug!("LLM request {}", doc);
+    //tracing::debug!("LLM request {}", doc);
 
     if path.starts_with("/v1/chat/completions")
         || path.starts_with("/api/v1/chat/completions")
@@ -578,8 +601,6 @@ fn scramble_response(
 ) -> Result<Vec<u8>, ProxyError> {
     match serde_json::from_slice::<Value>(&body) {
         Ok(mut doc) => {
-            tracing::debug!("{:?}", doc);
-
             if let Some(object) = doc.get("object").and_then(Value::as_str) {
                 if object == "chat.completion" {
                     if let Some(choices) =
@@ -651,4 +672,134 @@ fn get_delay(rng: &mut SmallRng, mean: &f64, stddev: &f64) -> Duration {
     let millis = sample.floor() as u64;
     let nanos = ((sample - millis as f64) * 1_000_000.0).round() as u32;
     Duration::from_millis(millis) + Duration::from_nanos(nanos as u64)
+}
+
+fn rewrite_sse_stream(
+    body: BoxChunkStream,
+    regex: Regex,
+    replacement: String,
+) -> BoxChunkStream {
+    // we need an accumulator to handle reading of chunks that span
+    // multiple stream read
+    let acc = Arc::new(Mutex::new(String::new()));
+    let rep = replacement;
+
+    let stream = body.map(move |chunk_res| {
+        let regex = regex.clone();
+        let acc = acc.clone();
+        chunk_res.map(|bytes| {
+            // Decode chunk (SSE is text)
+            let mut piece = match std::str::from_utf8(&bytes) {
+                Ok(s) => s.replace("\r\n", "\n"), // normalize EOL
+                Err(_) => return bytes,           // pass through if not UTF-8
+            };
+
+            // Append to accumulator
+            {
+                let mut a = acc.lock().unwrap();
+                a.push_str(&piece);
+                // We consume complete events from `a` into `out`,
+                // leaving any partial event in `a` for the next chunk.
+            }
+
+            // Extract complete events
+            let mut out = String::new();
+            {
+                let mut a = acc.lock().unwrap();
+
+                loop {
+                    // Find end of next complete event (blank line)
+                    let Some(pos) = a.find("\n\n") else { break };
+
+                    // Split out one full event (without the trailing blank
+                    // line)
+                    let event = a[..pos].to_string();
+
+                    // Drain consumed part + the blank line
+                    a.drain(..pos + 2);
+
+                    // Parse the event lines
+                    let mut header_lines: Vec<&str> = Vec::new();
+                    let mut data_lines: Vec<&str> = Vec::new();
+
+                    for line in event.lines() {
+                        if let Some(rest) = line.strip_prefix("data:") {
+                            data_lines
+                                .push(rest.strip_prefix(' ').unwrap_or(rest));
+                        } else {
+                            header_lines.push(line);
+                        }
+                    }
+
+                    // Let's re-emit events with no data unchanged
+                    if data_lines.is_empty() {
+                        out.push_str(&event);
+                        out.push_str("\n\n");
+                        continue;
+                    }
+
+                    let data_payload = data_lines.join("\n");
+
+                    // Special case: [DONE]
+                    // https://platform.openai.com/docs/api-reference/runs/createRun#runs_createrun-stream
+                    if data_payload.trim() == "[DONE]" {
+                        if !header_lines.is_empty() {
+                            out.push_str(&header_lines.join("\n"));
+                            out.push('\n');
+                        }
+                        out.push_str("data: [DONE]\n\n");
+                        continue;
+                    }
+
+                    // Let's try rewriting choices[0].delta.content
+                    match serde_json::from_str::<Value>(&data_payload) {
+                        Ok(mut json) => {
+                            if let Some(content_val) = json
+                                .get_mut("choices")
+                                .and_then(|c| c.get_mut(0))
+                                .and_then(|c| c.get_mut("delta"))
+                                .and_then(|d| d.get_mut("content"))
+                            {
+                                if let Some(content_str) = content_val.as_str()
+                                {
+                                    let replaced = regex
+                                        .replace_all(content_str, rep.as_str())
+                                        .to_string();
+                                    *content_val = Value::String(replaced);
+                                }
+                            }
+
+                            // Re-serialize + emit, preserving headers
+                            if !header_lines.is_empty() {
+                                out.push_str(&header_lines.join("\n"));
+                                out.push('\n');
+                            }
+                            match serde_json::to_string(&json) {
+                                Ok(s) => {
+                                    out.push_str("data: ");
+                                    out.push_str(&s);
+                                    out.push_str("\n\n");
+                                }
+                                Err(_) => {
+                                    // fallback: original event untouched
+                                    out.push_str(&event);
+                                    out.push_str("\n\n");
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // Not JSON? Emit original event
+                            out.push_str(&event);
+                            out.push_str("\n\n");
+                        }
+                    }
+                }
+            }
+
+            // Emit only processed complete events for this chunk
+            Bytes::from(out)
+        })
+    });
+
+    Box::pin(stream)
 }

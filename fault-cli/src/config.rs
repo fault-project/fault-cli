@@ -437,8 +437,8 @@ impl From<(LlmCase, &LlmOptions)> for FaultConfig {
             LlmCase::PromptScramble => {
                 let s = OpenAiSettings {
                     case: LlmCase::PromptScramble,
-                    pattern: None,
-                    replacement: None,
+                    pattern: options.scramble_pattern.clone(),
+                    replacement: options.scramble_with.clone(),
                     instruction: options.instruction.clone(),
                     probability: options.probability,
                     kind: FaultKind::PromptScramble,
