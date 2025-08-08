@@ -25,8 +25,8 @@
 
 fault is a Rust-powered CLI with two main features:
 
-* fault injection: injects network faults into your system to learn about their impacts and how you recover from failures.
-* AI-agent: run fault as a MCP server in your favourit code editor to improve the production-soundness of its output
+* fault injection: injects faults into LLM prompts as well as into network calls to learn about their impacts and how you recover from failures.
+* AI-agent: run fault as a MCP server in your favorite code editor to improve the production-soundness of its output
 
 [![asciicast](https://asciinema.org/a/l2pc0o8bBTJULesRrevcMuugc.svg)](https://asciinema.org/a/l2pc0o8bBTJULesRrevcMuugc)
 
