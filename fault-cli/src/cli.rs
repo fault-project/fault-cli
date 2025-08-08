@@ -1395,7 +1395,7 @@ pub struct FaultInjectionKubernetesConfig {
         long,
         help = "Container image performing the fault.",
         env = "FAULT_INJECTION_K8S_IMAGE",
-        default_value = "ghcr.io/rebound-how/fault:latest"
+        default_value = "ghcr.io/fault-project/fault-cli:latest"
     )]
     pub image: String,
 
@@ -1448,7 +1448,7 @@ pub struct FaultInjectionAWSConfig {
         long,
         help = "Container image performing the fault.",
         env = "FAULT_INJECTION_AWS_IMAGE",
-        default_value = "ghcr.io/rebound-how/fault:latest"
+        default_value = "ghcr.io/fault-project/fault-cli:latest"
     )]
     pub image: String,
 

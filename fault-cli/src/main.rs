@@ -1065,7 +1065,7 @@ async fn run_scenario_command(
                                     &mut inject::k8s::KubernetesPlatform::new_proxy(
                                         &ns,
                                         &service,
-                                        &image.clone().unwrap_or("ghcr.io/rebound-how/fault:latest".to_string()),
+                                        &image.clone().unwrap_or("ghcr.io/fault-project/fault-cli:latest".to_string()),
                                         &api_address,
                                         fault_settings
                                     ).await?;
