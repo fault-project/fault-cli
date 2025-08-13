@@ -382,7 +382,7 @@ pub struct DbOptions {
 #[clap(next_help_heading = "DNS Options")]
 pub struct DnsOptions {
     /// Remote resolver for passing queries (IP, IP:PORT)
-    #[clap(long, default_value = "127.0.0.1:53", env = "FAULT_DNS_RESOLVER")]
+    #[clap(long, default_value = "127.0.0.53:53", env = "FAULT_DNS_RESOLVER")]
     pub resolver: String,
 
     /// Probability for injection [0, 1] (never to always)
