@@ -33,6 +33,12 @@ impl ProxyMap {
         // Parse both sides with same logic, left defines protocol
         let (proto, listen_addr) = Self::parse_side(left, None)?;
         let (_, target_addr) = Self::parse_side(right, Some(proto))?;
+        let s: Option<SocketAddr> =
+            format!("{}:{}", &target_addr.host, target_addr.port).parse().ok();
+        let sock_addr = match s {
+            Some(sk) => sk,
+            None => return Err("failed to parse the remote socket".to_string()),
+        };
 
         Ok(ProxyMap {
             proto: Some(proto),
@@ -46,6 +52,7 @@ impl ProxyMap {
             remote: RemoteAddrConfig {
                 remote_host: target_addr.host,
                 remote_port: target_addr.port,
+                socket_addr: sock_addr,
             },
         })
     }
@@ -118,6 +125,12 @@ impl ProxyMap {
             .collect()
     }
 
+    pub fn filter_udp(maps: Vec<Self>) -> Vec<Self> {
+        maps.into_iter()
+            .filter(|m| m.proto == Some(ProtocolType::Udp))
+            .collect()
+    }
+
     pub fn filter_http(maps: Vec<Self>) -> Vec<Self> {
         maps.into_iter()
             .filter(|m| {
@@ -138,6 +151,7 @@ impl ProtocolType {
             "https" => ProtocolType::Https,
             "psql" => ProtocolType::Psql,
             "psqls" => ProtocolType::Psqls,
+            "udp" => ProtocolType::Udp,
             _ => ProtocolType::None,
         }
     }
@@ -146,7 +160,7 @@ impl ProtocolType {
     pub fn is_known(s: &str) -> bool {
         matches!(
             s.to_lowercase().as_str(),
-            "tcp" | "http" | "https" | "psql" | "psqls"
+            "tcp" | "http" | "https" | "psql" | "psqls" | "udp"
         )
     }
 }

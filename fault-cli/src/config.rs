@@ -17,13 +17,12 @@ use crate::cli::LlmOptions;
 //use crate::cli::PacketDuplicationOptions;
 use crate::cli::PacketLossOptions;
 use crate::cli::RunCommonOptions;
-use crate::fault::content::ContentInjectSettings;
-use crate::fault::llm::openai::OpenAiInjector;
 use crate::fault::llm::openai::OpenAiSettings;
 use crate::fault::llm::openai::SlowStreamSettings;
 use crate::types::BandwidthUnit;
 use crate::types::DbCase;
 use crate::types::Direction;
+use crate::types::DnsCase;
 use crate::types::LatencyDistribution;
 use crate::types::LlmCase;
 use crate::types::ProtocolType;
@@ -78,11 +77,12 @@ pub struct JitterSettings {
 }
 
 /// Internal Configuration for DNS Fault
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DnsSettings {
-    pub kind: FaultKind,
     pub enabled: bool,
-    pub rate: f64, // between 0 and 1.0
+    pub probability: f64,
+    pub case: DnsCase,
+    pub delay_ms: Option<Duration>,
 }
 
 /// Internal Configuration for Packet Duplication Fault
@@ -139,7 +139,6 @@ pub struct LlmSettings {}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum FaultConfig {
     // network
-    Dns(DnsSettings),
     Latency(LatencySettings),
     PacketLoss(PacketLossSettings),
     Bandwidth(BandwidthSettings),
@@ -153,6 +152,9 @@ pub enum FaultConfig {
     PromptScramble(OpenAiSettings),
     InjectBias(OpenAiSettings),
     TruncateResponse(OpenAiSettings),
+
+    // dns
+    Dns(DnsSettings),
 }
 
 /// Implement Default manually for FaultConfig
@@ -165,7 +167,6 @@ impl Default for FaultConfig {
 impl fmt::Display for FaultConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FaultConfig::Dns(_) => write!(f, "dns"),
             FaultConfig::Latency(_) => write!(f, "latency"),
             FaultConfig::PacketLoss(_) => write!(f, "packet-loss"),
             FaultConfig::Bandwidth(_) => write!(f, "bandwidth"),
@@ -181,6 +182,7 @@ impl fmt::Display for FaultConfig {
                 write!(f, "llm-truncate-response")
             }
             FaultConfig::SlowStream(_) => write!(f, "llm-slow-stream"),
+            FaultConfig::Dns(_) => write!(f, "dns"),
         }
     }
 }
@@ -188,7 +190,6 @@ impl fmt::Display for FaultConfig {
 impl FaultConfig {
     pub fn kind(&self) -> FaultKind {
         match self {
-            FaultConfig::Dns(_) => FaultKind::Dns,
             FaultConfig::Latency(_) => FaultKind::Latency,
             FaultConfig::PacketLoss(_) => FaultKind::PacketLoss,
             FaultConfig::Bandwidth(_) => FaultKind::Bandwidth,
@@ -200,6 +201,7 @@ impl FaultConfig {
             FaultConfig::InjectBias(_) => FaultKind::InjectBias,
             FaultConfig::TruncateResponse(_) => FaultKind::TruncateResponse,
             FaultConfig::SlowStream(_) => FaultKind::SlowStream,
+            FaultConfig::Dns(_) => FaultKind::Dns,
         }
     }
 }
@@ -212,7 +214,6 @@ pub enum FaultKind {
     Unknown,
 
     // network
-    Dns,
     Latency,
     PacketLoss,
     Bandwidth,
@@ -228,13 +229,15 @@ pub enum FaultKind {
     PromptScramble,
     InjectBias,
     TruncateResponse,
+
+    // dns
+    Dns,
 }
 
 impl fmt::Display for FaultKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FaultKind::Unknown => write!(f, "unknown"),
-            FaultKind::Dns => write!(f, "dns"),
             FaultKind::Latency => write!(f, "latency"),
             FaultKind::PacketLoss => write!(f, "packet-loss"),
             FaultKind::Bandwidth => write!(f, "bandwidth"),
@@ -248,6 +251,7 @@ impl fmt::Display for FaultKind {
             FaultKind::InjectBias => write!(f, "inject-bias"),
             FaultKind::TruncateResponse => write!(f, "truncate-response"),
             FaultKind::SlowStream => write!(f, "slow-stream"),
+            FaultKind::Dns => write!(f, "dns"),
         }
     }
 }
@@ -277,10 +281,6 @@ impl From<RunCommonOptions> for ProxyConfig {
 
         if cli.bandwidth.enabled && cli.bandwidth.bandwidth_sched.is_none() {
             faults.push(FaultConfig::Bandwidth((&cli.bandwidth).into()));
-        }
-
-        if cli.dns.enabled && cli.dns.dns_sched.is_none() {
-            faults.push(FaultConfig::Dns((&cli.dns).into()));
         }
 
         if cli.jitter.enabled && cli.jitter.jitter_sched.is_none() {
@@ -356,16 +356,6 @@ impl From<&JitterOptions> for JitterSettings {
             amplitude: cli.jitter_amplitude,
             frequency: cli.jitter_frequency,
             side: cli.jitter_side.clone(),
-        }
-    }
-}
-
-impl From<&DnsOptions> for DnsSettings {
-    fn from(cli: &DnsOptions) -> Self {
-        DnsSettings {
-            enabled: cli.enabled,
-            kind: FaultKind::Dns,
-            rate: cli.dns_rate,
         }
     }
 }
@@ -523,6 +513,61 @@ impl From<(DbCase, &DbOptions)> for FaultConfig {
                 http_response_trigger_probability: options.deadlock_rate,
             }),
             _ => FaultConfig::Latency(LatencySettings::default()),
+        }
+    }
+}
+
+impl From<(DnsCase, &DnsOptions)> for FaultConfig {
+    fn from((case, options): (DnsCase, &DnsOptions)) -> Self {
+        match case {
+            DnsCase::NxDomain => FaultConfig::Dns(DnsSettings {
+                enabled: true,
+                probability: options.probability,
+                case: DnsCase::NxDomain,
+                delay_ms: options.delay,
+            }),
+            DnsCase::ServFail => FaultConfig::Dns(DnsSettings {
+                enabled: true,
+                probability: options.probability,
+                case: DnsCase::ServFail,
+                delay_ms: options.delay,
+            }),
+            DnsCase::Refused => FaultConfig::Dns(DnsSettings {
+                enabled: true,
+                probability: options.probability,
+                case: DnsCase::Refused,
+                delay_ms: options.delay,
+            }),
+            DnsCase::Timeout => FaultConfig::Dns(DnsSettings {
+                enabled: true,
+                probability: options.probability,
+                case: DnsCase::Timeout,
+                delay_ms: options.delay,
+            }),
+            DnsCase::Truncated => FaultConfig::Dns(DnsSettings {
+                enabled: true,
+                probability: options.probability,
+                case: DnsCase::Truncated,
+                delay_ms: options.delay,
+            }),
+            DnsCase::Delay => FaultConfig::Dns(DnsSettings {
+                enabled: true,
+                probability: options.probability,
+                case: DnsCase::Delay,
+                delay_ms: options.delay,
+            }),
+            DnsCase::RandomA => FaultConfig::Dns(DnsSettings {
+                enabled: true,
+                probability: options.probability,
+                case: DnsCase::RandomA,
+                delay_ms: options.delay,
+            }),
+            DnsCase::EmptyAnswer => FaultConfig::Dns(DnsSettings {
+                enabled: true,
+                probability: options.probability,
+                case: DnsCase::EmptyAnswer,
+                delay_ms: options.delay,
+            }),
         }
     }
 }

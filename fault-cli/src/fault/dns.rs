@@ -1,21 +1,24 @@
 use std::fmt;
+use std::net::Ipv4Addr;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use axum::http;
-use hickory_resolver::TokioResolver;
+use bytes::Bytes;
+use hickory_resolver::proto::op::Message;
+use hickory_resolver::proto::op::MessageType;
+use hickory_resolver::proto::op::Query;
+use hickory_resolver::proto::op::ResponseCode;
+use hickory_resolver::proto::rr::RData;
+use hickory_resolver::proto::rr::Record;
+use hickory_resolver::proto::rr::RecordType;
+use hickory_resolver::proto::rr::rdata::A;
 use http::HeaderMap;
 use http::StatusCode;
 use rand::Rng;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
-use reqwest::Body;
-use reqwest::dns::Addrs;
-use reqwest::dns::Name;
-use reqwest::dns::Resolve;
-use reqwest::dns::Resolving;
-use tokio::sync::RwLock;
 
 use super::Bidirectional;
 use super::FaultInjector;
@@ -25,17 +28,20 @@ use crate::errors::ProxyError;
 use crate::event::FaultEvent;
 use crate::event::ProxyTaskEvent;
 use crate::fault::BoxChunkStream;
+use crate::fault::DatagramAction;
 use crate::types::Direction;
+use crate::types::DnsCase;
 use crate::types::StreamSide;
 
-/// Custom DNS Resolver that simulates DNS failures
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct FaultyResolverInjector {
-    inner: Arc<RwLock<TokioResolver>>,
     settings: DnsSettings,
-    event: Option<Box<dyn ProxyTaskEvent>>,
-    side: StreamSide,
-    rng: SmallRng,
+}
+
+impl From<&DnsSettings> for FaultyResolverInjector {
+    fn from(settings: &DnsSettings) -> Self {
+        FaultyResolverInjector { settings: settings.clone() }
+    }
 }
 
 impl fmt::Display for FaultyResolverInjector {
@@ -44,69 +50,9 @@ impl fmt::Display for FaultyResolverInjector {
     }
 }
 
-impl From<&DnsSettings> for FaultyResolverInjector {
-    fn from(settings: &DnsSettings) -> Self {
-        let resolver = TokioResolver::builder_tokio().unwrap().build();
-        FaultyResolverInjector {
-            inner: Arc::new(RwLock::new(resolver)),
-            settings: settings.clone(),
-            event: None,
-            side: StreamSide::Client,
-            rng: SmallRng::from_os_rng(),
-        }
-    }
-}
-
-impl FaultyResolverInjector {
-    fn should_apply_fault_resolver(&mut self) -> bool {
-        self.rng.random_bool(self.settings.rate)
-    }
-
-    pub fn with_event(&mut self, event: Box<dyn ProxyTaskEvent>) {
-        self.event = Some(event);
-    }
-}
-
-impl Resolve for FaultyResolverInjector {
-    fn resolve(&self, hostname: Name) -> Resolving {
-        let mut self_clone = self.clone();
-
-        Box::pin(async move {
-            let host = hostname.as_str();
-            let apply_fault = self_clone.should_apply_fault_resolver();
-            tracing::debug!("Apply a dns resolver {}", apply_fault);
-
-            if apply_fault {
-                let _ = match self_clone.event {
-                    Some(event) => event.with_fault(FaultEvent::Dns {
-                        direction: Direction::Egress,
-                        side: self_clone.side.clone(),
-                        triggered: Some(true),
-                    }),
-                    None => Ok(()),
-                };
-                let io_error =
-                    std::io::Error::other("Simulated DNS resolution failure");
-                return Err(io_error.into());
-            }
-
-            let _ = match self_clone.event {
-                Some(event) => event.with_fault(FaultEvent::Dns {
-                    direction: Direction::Egress,
-                    side: self_clone.side.clone(),
-                    triggered: Some(false),
-                }),
-                None => Ok(()),
-            };
-
-            let resolver = self_clone.inner.read().await;
-            let lookup = resolver.lookup_ip(host).await?;
-            let ips = lookup.into_iter().collect::<Vec<_>>();
-            let addrs: Addrs =
-                Box::new(ips.into_iter().map(|addr| SocketAddr::new(addr, 0)));
-
-            Ok(addrs)
-        })
+impl Clone for FaultyResolverInjector {
+    fn clone(&self) -> Self {
+        Self { settings: self.settings.clone() }
     }
 }
 
@@ -136,14 +82,8 @@ impl FaultInjector for FaultyResolverInjector {
     async fn apply_on_request_builder(
         &self,
         builder: reqwest::ClientBuilder,
-        event: Box<dyn ProxyTaskEvent>,
+        _event: Box<dyn ProxyTaskEvent>,
     ) -> Result<reqwest::ClientBuilder, ProxyError> {
-        let mut cloned = self.clone();
-        cloned.with_event(event);
-
-        let resolver: Arc<FaultyResolverInjector> = Arc::new(cloned);
-        tracing::debug!("Adding faulty dns resolver on builder");
-        let builder = builder.dns_resolver(resolver);
         Ok(builder)
     }
 
@@ -165,12 +105,148 @@ impl FaultInjector for FaultyResolverInjector {
         Ok((status, headers, body))
     }
 
+    async fn apply_on_datagram(
+        &self,
+        packet: Bytes,
+        peer: SocketAddr,
+        direction: Direction,
+        event: Box<dyn ProxyTaskEvent>,
+    ) -> Result<DatagramAction, ProxyError> {
+        let settings = &self.settings;
+
+        let _ = event.with_fault(FaultEvent::Dns {
+            direction: Direction::Ingress,
+            side: StreamSide::Server,
+            case: format!("{:?}", settings.case),
+            triggered: Some(true),
+        });
+
+        let slice: &[u8] = packet.as_ref();
+
+        let req = Message::from_vec(slice)
+            .map_err(|e| ProxyError::Other(e.to_string()))?;
+        let id = req.id();
+        let rd = req.recursion_desired();
+        let q = req.queries().get(0).cloned();
+
+        if matches!(settings.case, DnsCase::Timeout) {
+            if let Some(delay_ms) = self.settings.delay_ms {
+                tokio::time::sleep(delay_ms).await
+            }
+
+            let _ = event.on_applied(FaultEvent::Dns {
+                direction: Direction::Ingress,
+                side: StreamSide::Server,
+                case: format!("{:?}", settings.case),
+                triggered: Some(true),
+            });
+
+            return Ok(DatagramAction::Pass(packet));
+        }
+
+        let mut m = base_reply(id, rd, &q);
+
+        match settings.case {
+            DnsCase::Truncated => {
+                if let Some(delay_ms) = self.settings.delay_ms {
+                    tokio::time::sleep(delay_ms).await
+                }
+                m.set_truncated(true);
+            }
+            DnsCase::Refused => {
+                if let Some(delay_ms) = self.settings.delay_ms {
+                    tokio::time::sleep(delay_ms).await
+                }
+                m.set_response_code(ResponseCode::Refused);
+            }
+            DnsCase::ServFail => {
+                if let Some(delay_ms) = self.settings.delay_ms {
+                    tokio::time::sleep(delay_ms).await
+                }
+                m.set_response_code(ResponseCode::ServFail);
+            }
+            DnsCase::NxDomain => {
+                if let Some(delay_ms) = self.settings.delay_ms {
+                    tokio::time::sleep(delay_ms).await
+                }
+                m.set_response_code(ResponseCode::NXDomain);
+            }
+            DnsCase::EmptyAnswer => {
+                if let Some(delay_ms) = self.settings.delay_ms {
+                    tokio::time::sleep(delay_ms).await
+                }
+            }
+            DnsCase::RandomA => {
+                if let Some(delay_ms) = self.settings.delay_ms {
+                    tokio::time::sleep(delay_ms).await
+                }
+
+                if let Some(query) = &q {
+                    let mut rng = SmallRng::from_os_rng();
+
+                    if query.query_type() == RecordType::A {
+                        let ip = Ipv4Addr::new(
+                            rng.random(),
+                            rng.random(),
+                            rng.random(),
+                            rng.random(),
+                        );
+                        let rec = Record::from_rdata(
+                            query.name().clone(),
+                            30,
+                            RData::A(A::from(ip)),
+                        );
+                        m.add_answer(rec);
+                    }
+                }
+            }
+            DnsCase::Delay => {
+                if let Some(delay_ms) = self.settings.delay_ms {
+                    tokio::time::sleep(delay_ms).await
+                }
+
+                let _ = event.on_applied(FaultEvent::Dns {
+                    direction: Direction::Ingress,
+                    side: StreamSide::Server,
+                    case: format!("{:?}", settings.case),
+                    triggered: Some(true),
+                });
+
+                return Ok(DatagramAction::Pass(packet));
+            }
+            DnsCase::Timeout => {
+                if let Some(delay_ms) = self.settings.delay_ms {
+                    tokio::time::sleep(delay_ms).await
+                }
+
+                let _ = event.on_applied(FaultEvent::Dns {
+                    direction: Direction::Ingress,
+                    side: StreamSide::Server,
+                    case: format!("{:?}", settings.case),
+                    triggered: Some(true),
+                });
+
+                return Ok(DatagramAction::Drop);
+            }
+        }
+
+        let _ = event.on_applied(FaultEvent::Dns {
+            direction: Direction::Ingress,
+            side: StreamSide::Server,
+            case: format!("{:?}", settings.case),
+            triggered: Some(true),
+        });
+
+        let bytes = m.to_vec().map_err(|e| ProxyError::Other(e.to_string()))?;
+        Ok(DatagramAction::Respond(Bytes::from(bytes)))
+    }
+
     fn is_enabled(&self) -> bool {
         self.settings.enabled
     }
 
     fn kind(&self) -> FaultKind {
-        self.settings.kind
+        FaultKind::Dns
     }
 
     fn enable(&mut self) {
@@ -184,4 +260,20 @@ impl FaultInjector for FaultyResolverInjector {
     fn clone_box(&self) -> Box<dyn FaultInjector> {
         Box::new(self.clone())
     }
+}
+
+//
+// Private functions
+//
+
+fn base_reply(id: u16, rd: bool, q: &Option<Query>) -> Message {
+    let mut m = Message::new();
+    m.set_id(id);
+    m.set_message_type(MessageType::Response);
+    m.set_recursion_desired(rd);
+    m.set_recursion_available(true);
+    if let Some(q) = q {
+        m.add_query(q.clone());
+    }
+    m
 }

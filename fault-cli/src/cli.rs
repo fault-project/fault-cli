@@ -22,6 +22,7 @@ use crate::types::BandwidthUnit;
 use crate::types::DbCase;
 use crate::types::DbTarget;
 use crate::types::Direction;
+use crate::types::DnsCase;
 use crate::types::LatencyDistribution;
 use crate::types::LlmCase;
 use crate::types::LlmTarget;
@@ -377,6 +378,22 @@ pub struct DbOptions {
     pub corruption_rate: f64,
 }
 
+#[derive(Parser, Clone, Debug)]
+#[clap(next_help_heading = "DNS Options")]
+pub struct DnsOptions {
+    /// Remote resolver for passing queries (IP, IP:PORT)
+    #[clap(long, default_value = "127.0.0.1:53", env = "FAULT_DNS_RESOLVER")]
+    pub resolver: String,
+
+    /// Probability for injection [0, 1] (never to always)
+    #[clap(long, default_value = "1.0", value_parser = validate_probability, env = "FAULT_LLM_PROBABILITY",)]
+    pub probability: f64,
+
+    /// Delay per query (e.g. "200ms")
+    #[clap(long, value_parser = validate_parse_human_duration, env = "FAULT_DNS_DELAY")]
+    pub delay: Option<Duration>,
+}
+
 #[derive(Subcommand, Clone, Debug)]
 #[clap(subcommand_required = false, subcommand = "proxy")]
 pub enum RunCommands {
@@ -397,7 +414,7 @@ pub enum RunCommands {
         settings: LlmOptions,
     },
 
-    #[clap(next_help_heading = "Databaase-specific faults")]
+    #[clap(next_help_heading = "Database-specific faults")]
     Db {
         /// Which database to target
         #[clap(value_enum)]
@@ -409,6 +426,16 @@ pub enum RunCommands {
 
         #[clap(flatten)]
         settings: DbOptions,
+    },
+
+    #[clap(next_help_heading = "DNS-specific faults")]
+    Dns {
+        /// Which scenarios to run
+        #[clap(value_enum, long = "case")]
+        cases: Vec<DnsCase>,
+
+        #[clap(flatten)]
+        settings: DnsOptions,
     },
 }
 
@@ -679,41 +706,6 @@ pub struct JitterOptions {
 }
 
 #[derive(Parser, Debug, Serialize, Deserialize, Clone)]
-pub struct DnsOptions {
-    /// Dns fault enabled
-    #[arg(
-        help_heading = "DNS Options",
-        action,
-        name = "dns_enabled",
-        long = "with-dns",
-        default_value_t = false,
-        help = "Enable dns network fault.",
-        env = "FAULT_WITH_DNS"
-    )]
-    pub enabled: bool,
-
-    /// Probability to inject the error between 0 and 100
-    #[arg(
-        help_heading = "DNS Options",
-        long,
-        default_value_t = 0.5,
-        help = "Probability to trigger the DNS failure between 0.0 and 1.0.",
-        value_parser = validate_probability,
-        env = "FAULT_DNS_PROBABILITY",
-    )]
-    pub dns_rate: f64,
-
-    /// Dns period
-    #[arg(
-        help_heading = "DNS Options",
-        long,
-        help = "Dns schedule",
-        env = "FAULT_DNS_SCHED"
-    )]
-    pub dns_sched: Option<String>,
-}
-
-#[derive(Parser, Debug, Serialize, Deserialize, Clone)]
 pub struct PacketLossOptions {
     /// Packet Loss fault enabled
     #[arg(
@@ -937,10 +929,6 @@ pub struct RunCommonOptions {
     // Jitter Options
     #[command(flatten)]
     pub jitter: JitterOptions,
-
-    // Dns Options
-    #[command(flatten)]
-    pub dns: DnsOptions,
 
     // Packet Loss Options
     #[command(flatten)]

@@ -234,9 +234,6 @@ fn adjust_to_next_step(
                 period,
                 side,
             },
-            FaultConfiguration::Dns { period, rate: dns_rate } => {
-                FaultConfiguration::Dns { rate: dns_rate, period }
-            }
             FaultConfiguration::HttpError {
                 status_code,
                 body,

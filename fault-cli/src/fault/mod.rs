@@ -2,6 +2,7 @@ use std::error::Error as StdError;
 use std::fmt::Debug;
 use std::future::Future;
 use std::marker::Unpin;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
@@ -34,6 +35,7 @@ pub mod packet_loss;
 use crate::config::FaultKind;
 use crate::errors::ProxyError;
 use crate::event::ProxyTaskEvent;
+use crate::types::Direction;
 use crate::types::StreamSide;
 
 /// A composite trait that combines AsyncRead, AsyncWrite, Unpin, and Send.
@@ -166,6 +168,16 @@ pub trait FaultInjector:
         _event: Box<dyn ProxyTaskEvent>,
     ) -> Result<(StatusCode, HeaderMap, BoxChunkStream), ProxyError>;
 
+    async fn apply_on_datagram(
+        &self,
+        packet: Bytes,
+        _peer: SocketAddr,
+        _direction: Direction,
+        _event: Box<dyn ProxyTaskEvent>,
+    ) -> Result<DatagramAction, ProxyError> {
+        Ok(DatagramAction::Pass(packet))
+    }
+
     fn is_enabled(&self) -> bool;
     fn kind(&self) -> FaultKind;
 
@@ -212,3 +224,13 @@ where
 }
 
 impl<F> FutureDelay for DelayWrapper<F> where F: Future<Output = ()> + Send {}
+
+#[derive(Debug)]
+pub enum DatagramAction {
+    /// Continue proxying to the upstream with this (possibly mutated) packet.
+    Pass(Bytes),
+    /// Do not forward; immediately reply to the client with this payload.
+    Respond(Bytes),
+    /// Silently drop the packet (client will time out).
+    Drop,
+}

@@ -407,6 +407,7 @@ pub enum FaultEvent {
     Dns {
         direction: Direction,
         side: StreamSide,
+        case: String,
         triggered: Option<bool>,
     },
     Bandwidth {

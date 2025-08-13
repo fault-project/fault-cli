@@ -1,11 +1,12 @@
 use std::fmt;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::http;
+use bytes::Bytes;
 use http::HeaderMap;
 use http::StatusCode;
-use reqwest::Body;
 use reqwest::ClientBuilder;
 use reqwest::Request as ReqwestRequest;
 use serde::Deserialize;
@@ -17,6 +18,7 @@ use crate::errors::ProxyError;
 use crate::event::ProxyTaskEvent;
 use crate::fault::Bidirectional;
 use crate::fault::BoxChunkStream;
+use crate::fault::DatagramAction;
 use crate::fault::FaultInjector;
 use crate::fault::bandwidth::BandwidthLimitFaultInjector;
 use crate::fault::blackhole::BlackholeInjector;
@@ -27,6 +29,7 @@ use crate::fault::latency::LatencyInjector;
 use crate::fault::llm::openai::OpenAiInjector;
 use crate::fault::llm::openai::SlowStreamInjector;
 use crate::fault::packet_loss::PacketLossInjector;
+use crate::types::Direction;
 use crate::types::StreamSide;
 
 pub(crate) mod metrics;
@@ -80,6 +83,14 @@ pub trait ProxyPlugin: Send + Sync + std::fmt::Debug + fmt::Display {
         (Box<dyn Bidirectional + 'static>, Box<dyn Bidirectional + 'static>),
         ProxyError,
     >;
+
+    async fn inject_datagram(
+        &self,
+        dir: Direction,
+        mut packet: Bytes,
+        peer: SocketAddr,
+        event: Box<dyn ProxyTaskEvent>,
+    ) -> Result<DatagramAction, ProxyError>;
 }
 
 /// CompositePlugin that aggregates multiple FaultInjectors.
@@ -298,5 +309,28 @@ impl ProxyPlugin for CompositePlugin {
         }
 
         Ok((modified_client_stream, modified_server_stream))
+    }
+
+    #[tracing::instrument(skip_all, name = "Inject datagram")]
+    async fn inject_datagram(
+        &self,
+        direction: Direction,
+        mut packet: Bytes,
+        peer: SocketAddr,
+        event: Box<dyn ProxyTaskEvent>,
+    ) -> Result<DatagramAction, ProxyError> {
+        for inj in self.injectors.iter() {
+            match inj
+                .apply_on_datagram(packet, peer, direction, event.clone())
+                .await?
+            {
+                DatagramAction::Pass(p) => {
+                    packet = p;
+                }
+                act @ DatagramAction::Respond(_)
+                | act @ DatagramAction::Drop => return Ok(act),
+            }
+        }
+        Ok(DatagramAction::Pass(packet))
     }
 }

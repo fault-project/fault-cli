@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::net::Ipv4Addr;
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -28,6 +29,7 @@ pub enum ProtocolType {
     Psql,
     Psqls,
     Tls,
+    Udp,
 }
 
 impl ProtocolType {
@@ -74,6 +76,7 @@ impl ProxyMap {
                 ProtocolType::Tls => true,
                 ProtocolType::None => false,
                 ProtocolType::Tcp => false,
+                ProtocolType::Udp => false,
             },
             None => false,
         }
@@ -84,6 +87,7 @@ impl ProxyMap {
 pub struct RemoteAddrConfig {
     pub remote_host: String,
     pub remote_port: u16,
+    pub socket_addr: SocketAddr,
 }
 
 /// Structure to hold the final configuration.
@@ -175,7 +179,7 @@ impl fmt::Display for LatencyDistribution {
 }
 
 #[derive(
-    clap::ValueEnum, Clone, Debug, Serialize, Deserialize, Eq, PartialEq,
+    clap::ValueEnum, Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum Direction {
@@ -402,14 +406,6 @@ pub enum FaultConfiguration {
         #[serde(skip_serializing_if = "Option::is_none")]
         period: Option<FaultPeriodSpec>,
     },
-    Dns {
-        rate: f64,
-        #[serde(default)]
-        #[serde(deserialize_with = "derialize_period")]
-        #[serde(serialize_with = "serialize_period")]
-        #[serde(skip_serializing_if = "Option::is_none")]
-        period: Option<FaultPeriodSpec>,
-    },
     HttpError {
         status_code: u16,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -528,15 +524,6 @@ impl FaultConfiguration {
 
                 Ok(FaultConfig::Jitter(settings))
             }
-            FaultConfiguration::Dns { rate: dns_rate, .. } => {
-                let settings = config::DnsSettings {
-                    enabled: true,
-                    kind: FaultKind::Dns,
-                    rate: *dns_rate,
-                };
-
-                Ok(FaultConfig::Dns(settings))
-            }
             FaultConfiguration::HttpError {
                 status_code,
                 body,
@@ -575,7 +562,6 @@ impl FaultConfiguration {
             FaultConfiguration::PacketLoss { period, .. } => period,
             FaultConfiguration::Bandwidth { period, .. } => period,
             FaultConfiguration::Jitter { period, .. } => period,
-            FaultConfiguration::Dns { period, .. } => period,
             FaultConfiguration::HttpError { period, .. } => period,
             FaultConfiguration::Blackhole { period, .. } => period,
         }
@@ -587,7 +573,6 @@ impl FaultConfiguration {
             FaultConfiguration::PacketLoss { .. } => FaultKind::PacketLoss,
             FaultConfiguration::Bandwidth { .. } => FaultKind::Bandwidth,
             FaultConfiguration::Jitter { .. } => FaultKind::Jitter,
-            FaultConfiguration::Dns { .. } => FaultKind::Dns,
             FaultConfiguration::HttpError { .. } => FaultKind::HttpError,
             FaultConfiguration::Blackhole { .. } => FaultKind::Blackhole,
         }
@@ -788,18 +773,6 @@ impl FaultConfiguration {
 
                 if let Some(v) = period {
                     map.insert("FAULT_JITTER_SCHED".to_string(), v.to_string());
-                };
-            }
-            FaultConfiguration::Dns { rate, period } => {
-                map.insert("FAULT_WITH_DNS".to_string(), "true".to_string());
-
-                map.insert(
-                    "FAULT_DNS_PROBABILITY".to_string(),
-                    rate.to_string(),
-                );
-
-                if let Some(v) = period {
-                    map.insert("FAULT_DNS_SCHED".to_string(), v.to_string());
                 };
             }
             FaultConfiguration::HttpError {
@@ -1038,4 +1011,31 @@ pub enum DbCase {
     StaleReads,
     Timeout,
     Deadlock,
+}
+
+#[derive(ValueEnum, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum DnsCase {
+    NxDomain,
+    ServFail,
+    Refused,
+    Timeout,     // drop
+    Truncated,   // TC=1
+    Delay,       // sleep then minimal NOERROR
+    RandomA,     // random A record
+    EmptyAnswer, // NOERROR + empty answers
+}
+
+impl fmt::Display for DnsCase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DnsCase::NxDomain => write!(f, "nx-domain"),
+            DnsCase::ServFail => write!(f, "serv-fail"),
+            DnsCase::Refused => write!(f, "refused"),
+            DnsCase::Timeout => write!(f, "timeout"),
+            DnsCase::Truncated => write!(f, "truncated"),
+            DnsCase::Delay => write!(f, "delay"),
+            DnsCase::RandomA => write!(f, "random-A"),
+            DnsCase::EmptyAnswer => write!(f, "empty-answer"),
+        }
+    }
 }

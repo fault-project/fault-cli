@@ -738,9 +738,10 @@ pub async fn proxy_prelude(
                     ProtocolType::Http | ProtocolType::Https => "http",
                     ProtocolType::Tls | ProtocolType::Tcp => "tcp",
                     ProtocolType::Psql | ProtocolType::Psqls => "psql",
+                    ProtocolType::Udp => "udp",
                     _ => "",
                 },
-                None => todo!(),
+                None => "",
             };
 
             format!(
@@ -990,19 +991,6 @@ pub async fn proxy_prelude(
         );
     }
 
-    // DNS Fault
-    if opts.dns.enabled {
-        println!(
-            "{}",
-            format!(
-                "     - {}: {}: {}",
-                "DNS".cyan(),
-                "trigger probability".dim(),
-                opts.dns.dns_rate
-            )
-        );
-    }
-
     // Packet Loss Fault
     if opts.packet_loss.enabled {
         println!(
@@ -1087,6 +1075,21 @@ pub async fn proxy_prelude(
                     )
                 );
             }
+            FaultKind::Dns => {
+                if let FaultConfig::Dns(settings) = fc {
+                    println!(
+                        "{}",
+                        format!(
+                            "     - {}: {}: {:?}, {}: {:?}",
+                            format!("DNS {}", settings.case).cyan(),
+                            "side".dim(),
+                            StreamSide::Client,
+                            "direction".dim(),
+                            Direction::Egress
+                        )
+                    );
+                }
+            }
             _ => {}
         }
     }
@@ -1096,7 +1099,6 @@ pub async fn proxy_prelude(
         && !opts.latency.enabled
         && !opts.bandwidth.enabled
         && !opts.jitter.enabled
-        && !opts.dns.enabled
         && !opts.packet_loss.enabled
         && !opts.blackhole.enabled
         && extra_faults.is_empty()
@@ -1168,7 +1170,6 @@ fn fault_kind_label_and_color(kind: FaultKind) -> (&'static str, Color) {
     match kind {
         FaultKind::Latency => ("Latency", Color::DeepSkyBlue1),
         FaultKind::Bandwidth => ("Bandwidth", Color::LightCoral),
-        FaultKind::Dns => ("DNS", Color::Green),
         FaultKind::PacketLoss => ("PacketLoss", Color::Gold1),
         FaultKind::HttpError => ("HttpErr", Color::GreenYellow),
         FaultKind::Jitter => ("Jitter", Color::Purple1b),
@@ -1183,6 +1184,7 @@ fn fault_kind_label_and_color(kind: FaultKind) -> (&'static str, Color) {
         FaultKind::InjectBias => ("LLM Bias", Color::Yellow3b),
         FaultKind::TruncateResponse => ("LLM Truncate", Color::Yellow4a),
         FaultKind::SlowStream => ("LLM Slow Stream", Color::Aquamarine3),
+        FaultKind::Dns => ("DNS", Color::Green),
     }
 }
 

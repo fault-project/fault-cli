@@ -134,6 +134,7 @@ use uuid::Uuid;
 use crate::config::FaultConfig;
 use crate::errors::ProxyError;
 use crate::proxy::protocols::http::service::init::initialize_http_service_proxies;
+use crate::proxy::protocols::udp::init::initialize_udp_proxies;
 use crate::types::FaultConfiguration;
 use crate::types::ProtocolType;
 use crate::types::ProxyMap;
@@ -275,6 +276,17 @@ async fn main() -> Result<()> {
                     }
                 }
                 cli::RunCommands::Db { target, .. } => todo!(),
+                cli::RunCommands::Dns { cases, settings } => {
+                    http_proxies_disabled = true;
+
+                    let remote = match settings.resolver.contains(":") {
+                        true => settings.resolver,
+                        false => format!("{}:53", settings.resolver),
+                    };
+
+                    proxy_maps
+                        .insert(0, format!("udp:45553={}", remote).to_string());
+                }
             }
 
             // we keep an eye on changes in the fault configuration
@@ -334,6 +346,14 @@ async fn main() -> Result<()> {
 
                 let _http_proxies_guard = initialize_http_service_proxies(
                     ProxyMap::filter_http(proxied_protos.clone()),
+                    proxy_state.clone(),
+                    proxy_shutdown_rx.clone(),
+                    task_manager.clone(),
+                )
+                .await;
+
+                let _udp_proxy_guard = initialize_udp_proxies(
+                    ProxyMap::filter_udp(proxied_protos.clone()),
                     proxy_state.clone(),
                     proxy_shutdown_rx.clone(),
                     task_manager.clone(),
@@ -405,6 +425,10 @@ async fn main() -> Result<()> {
                     .map(|c| FaultConfig::from((c.clone(), &settings)))
                     .collect(),
                 cli::RunCommands::Db { target, cases, settings } => cases
+                    .iter()
+                    .map(|c| FaultConfig::from((c.clone(), &settings)))
+                    .collect(),
+                cli::RunCommands::Dns { cases, settings } => cases
                     .iter()
                     .map(|c| FaultConfig::from((c.clone(), &settings)))
                     .collect(),

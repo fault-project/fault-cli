@@ -297,30 +297,6 @@ pub fn build_schedule_events(
         }
     }
 
-    if cli.dns.enabled {
-        let period = match &cli.dns.dns_sched {
-            Some(p) => p,
-            None => match total_duration {
-                Some(_) => "duration:100%",
-                None => "",
-            },
-        };
-
-        if !period.is_empty() {
-            let specs = parse_periods(period)?;
-            let periods = resolve_periods(&specs, total_duration)?;
-            let fault_config = FaultConfig::Dns((&cli.dns).into());
-            let fault_events = build_events_for_fault(
-                FaultKind::Dns,
-                fault_config,
-                &periods,
-                start,
-            );
-
-            events.extend(fault_events);
-        }
-    }
-
     if cli.packet_loss.enabled {
         let period = match &cli.packet_loss.packet_loss_sched {
             Some(p) => p,

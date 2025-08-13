@@ -435,10 +435,6 @@ fn fault_to_string(fault: &FaultConfiguration) -> String {
 
             s
         }
-        FaultConfiguration::Dns { rate: dns_rate, .. } => {
-            s.push_str(&format!("DNS Fault - Rate: {}%", dns_rate * 100.0));
-            s
-        }
         FaultConfiguration::HttpError {
             status_code,
             body: _,

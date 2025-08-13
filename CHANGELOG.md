@@ -2,4 +2,4 @@
 
 ## Changed
 
-- Fix ghcr repository URL
+- Add proper DNS fault support

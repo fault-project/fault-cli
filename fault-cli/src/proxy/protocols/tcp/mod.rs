@@ -53,6 +53,9 @@ pub async fn run_tcp_proxy(
 
     loop {
         tokio::select! {
+            // let's make sure we prioritize the shutdown branch
+            biased;
+
             _ = shutdown_rx.recv() => {
                 tracing::info!("Shutdown signal received. Stopping listener.");
                 break;
