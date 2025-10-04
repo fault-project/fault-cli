@@ -185,17 +185,17 @@ jobs:
 
       - name: Build Linux/MacOSX (shared)
         if: matrix.os != 'windows-latest' && matrix.target != 'x86_64-unknown-linux-musl' && matrix.target != 'aarch64-unknown-linux-musl'
-        run: cargo +nightly build --release --features agent --target ${{ matrix.target }}
+        run: cargo +nightly build --profile prod-fast --features agent --target ${{ matrix.target }}
         working-directory: ./fault-cli
 
       - name: Build Windows (shared)
         if: matrix.os == 'windows-latest'
-        run: cargo +nightly build --release --target ${{ matrix.target }}
+        run: cargo +nightly build --profile prod-fast --target ${{ matrix.target }}
         working-directory: ./fault-cli
 
       - name: Build (static)
         if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
-        run: cargo +nightly zigbuild --release --target ${{ matrix.target }}
+        run: cargo +nightly zigbuild --profile prod-small --target ${{ matrix.target }}
         working-directory: ./fault-cli
 
       - name: Upload binaries to release
@@ -320,7 +320,7 @@ jobs:
         if: matrix.target != 'x86_64-unknown-linux-musl' && matrix.target != 'aarch64-unknown-linux-musl'
         run: |
           cargo install bpf-linker --git https://github.com/aya-rs/bpf-linker.git
-          cargo +nightly build --release --features stealth --target ${{ matrix.target }}
+          cargo +nightly build --profile prod-fast --features stealth --target ${{ matrix.target }}
           cargo +nightly build \
             --release \
             -p fault-ebpf-programs \
@@ -332,7 +332,7 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
         run: |
           cargo install bpf-linker --git https://github.com/aya-rs/bpf-linker.git
-          cargo +nightly zigbuild --release --features stealth --target ${{ matrix.target }}
+          cargo +nightly zigbuild --profile prod-fast --features stealth --target ${{ matrix.target }}
           cargo +nightly build \
             --release \
             -p fault-ebpf-programs \

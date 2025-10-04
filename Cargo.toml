@@ -24,11 +24,49 @@ include = [
 which = { version = "8.0.0", default-features = false, features = ["real-sys"] }
 anyhow = { version = "1", default-features = false }
 
-[profile.release]
-lto = true
-codegen-units = 1
-panic = "abort"
-
-[profile.release.package.fault-ebpf-programs]
-codegen-units = 1
+[profile.dev]
+opt-level = 0
 debug = 2
+debug-assertions = true
+overflow-checks = true
+incremental = true
+
+[profile.release]
+opt-level = 3
+lto = "thin"          # profile-level (allowed)
+codegen-units = 1
+panic = "abort"       # profile-level (allowed)
+incremental = false
+debug-assertions = false
+overflow-checks = false
+strip = "debuginfo"   # profile-level (allowed)
+
+# ---------- Server-focused profiles you select explicitly ----------
+[profile.prod-fast]
+inherits = "release"
+lto = "fat"
+opt-level = 3
+strip = "debuginfo"
+
+[profile.prod-small]
+inherits = "release"
+lto = "thin"
+opt-level = "z"
+strip = "symbols"
+
+# ---------- Per-package overrides (ONLY allowed keys) ----------
+
+# (Optional) tweak the server crate a bit; do NOT set lto/strip/panic here
+[profile.release.package.fault-cli]
+opt-level = 3
+codegen-units = 1
+# (leave out panic/lto/strip)
+
+# eBPF crate: conservative tweaks; again, no panic/lto/strip here
+[profile.release.package.fault-ebpf-programs]
+opt-level = "z"
+codegen-units = 1
+debug = 0
+debug-assertions = false
+overflow-checks = false
+# (leave out panic/lto/strip)

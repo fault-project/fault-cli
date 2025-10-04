@@ -1,0 +1,39 @@
+[build]
+# No global rustflags here; target-specific below.
+# If you always target a specific platform for the server, set:
+# target = "x86_64-unknown-linux-gnu"
+
+# -------- Server target (GNU Linux example) --------
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+  "-C", "target-cpu=native",          # use host CPU features for the server
+  "-C", "symbol-mangling-version=v0",
+  "-C", "link-arg=-Wl,--gc-sections",
+]
+
+# macOS (if you build/run locally)
+[target.aarch64-apple-darwin]
+rustflags = [
+  "-C", "target-cpu=native",
+  "-C", "symbol-mangling-version=v0",
+  "-C", "link-arg=-Wl,-dead_strip",
+]
+
+# -------- eBPF target (Aya / bpfel-unknown-none as an example) --------
+# Adjust this triple to your actual BPF target (bpfel-unknown-none or bpfeb)
+[target.bpfel-unknown-none]
+rustflags = [
+  # keep minimal & portable; let profiles set panic=abort
+  "-C", "link-arg=-z",   # placeholder; typically no special link args here
+  # (avoid target-cpu=native, avoid exotic link flags)
+]
+
+# -------- Optional MUSL for small static server builds --------
+# [target.x86_64-unknown-linux-musl]
+# linker = "musl-gcc"
+# rustflags = [
+#   "-C", "target-cpu=x86-64-v3",
+#   "-C", "embed-bitcode=no",
+#   "-C", "symbol-mangling-version=v0",
+#   "-C", "link-arg=-Wl,--gc-sections",
+# ]

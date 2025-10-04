@@ -158,8 +158,7 @@ path = "src/main.rs"
 default = [
     "demo",
     "scenario",
-    "injection",
-    "agent"
+    "injection"
 ]
 demo = []
 scenario = [
