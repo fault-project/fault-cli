@@ -22,9 +22,6 @@ rustflags = [
 # Adjust this triple to your actual BPF target (bpfel-unknown-none or bpfeb)
 [target.bpfel-unknown-none]
 rustflags = [
-  # keep minimal & portable; let profiles set panic=abort
-  "-C", "link-arg=-z",   # placeholder; typically no special link args here
-  # (avoid target-cpu=native, avoid exotic link flags)
 ]
 
 # -------- Optional MUSL for small static server builds --------
