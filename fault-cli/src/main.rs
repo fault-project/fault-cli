@@ -3,6 +3,8 @@
 // necessary to use is_global on IPv4 addr
 // https://github.com/rust-lang/rust/issues/27709
 #![feature(ip)]
+// necessary
+#![feature(file_lock)]
 
 #[cfg(feature = "agent")]
 mod agent;

@@ -13,19 +13,27 @@ pub async fn run(
     embed_model: &str,
     embed_model_dim: u64,
 ) -> Result<()> {
-    let fault_agent: tools::FaultMCP = tools::FaultMCP::new(
+    let fault_agent = tools::FaultMCP::new(
         llm_type,
         prompt_model,
         embed_model,
         embed_model_dim,
     );
+
     let service = fault_agent.serve(stdio()).await?;
+
     match service.waiting().await? {
         rmcp::service::QuitReason::Cancelled => {
-            println!("MCP server was cancelled")
+            println!("MCP server was cancelled");
+            Ok(())
         }
-        rmcp::service::QuitReason::Closed => println!("MCP server was closed"),
+        rmcp::service::QuitReason::Closed => {
+            println!("MCP server was closed");
+            Ok(())
+        }
+        rmcp::service::QuitReason::JoinError(err) => {
+            // surface the underlying task failure
+            Err(err.into())
+        }
     }
-
-    Ok(())
 }

@@ -3,8 +3,10 @@ use anyhow::anyhow;
 #[cfg(all(target_os = "linux", feature = "stealth-auto-build"))]
 use aya_build::cargo_metadata;
 
+use tonic_prost_build;
+
 fn main() -> anyhow::Result<()> {
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .build_server(true)
         .build_client(true)
         .compile_protos(

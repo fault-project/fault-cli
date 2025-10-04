@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use duckdb;
+use serde_json::Value;
 use serde_json::json;
 use similar_string::find_best_similarity;
 use swiftide::indexing;
@@ -96,6 +97,7 @@ pub async fn index(
     Ok(())
 }
 
+
 #[derive(Clone)]
 pub struct TagOpId {
     pub opids: Vec<String>,
@@ -119,37 +121,32 @@ impl WithIndexingDefaults for TagOpId {}
 
 #[async_trait]
 impl Transformer for TagOpId {
+    type Input = String;
+    type Output = String;
+
     async fn transform_node(
         &self,
-        mut node: indexing::Node,
-    ) -> Result<indexing::Node> {
+        mut node: indexing::Node<Self::Input>,
+    ) -> Result<indexing::Node<Self::Output>> {
         /*if let Some(outline) = node.metadata.get("Outline") {
             println!("{:?}", outline);
         }*/
         if let Some(v) = node.metadata.get(NAME_DEFINITIONS) {
-            match v.clone() {
-                tera::Value::String(s) => {
-                    let defs: Vec<&str> = s.split(",").collect();
-                    for opid in &self.opids {
-                        match find_best_similarity(opid, &defs) {
-                            Some((m, score)) => {
-                                tracing::debug!(
-                                    "Matched {} with {} score {}",
-                                    opid,
-                                    m,
-                                    score
-                                );
-                                node.metadata.insert(opid, m);
-                                node.metadata
-                                    .insert("operation_id", json!(opid));
-                                break;
-                            }
-                            None => {}
-                        }
-                    }
-                }
-                _ => {}
+            // v might be a comma-separated string or an array; handle both
+            let defs: Vec<String> = match v {
+                Value::String(s) => s.split(',').map(|s| s.trim().to_string()).collect(),
+                Value::Array(arr) => arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect(),
+                _ => Vec::new(),
             };
+
+            for opid in &self.opids {
+                if let Some((m, score)) = find_best_similarity(opid, &defs.iter().map(|s| s.as_str()).collect::<Vec<_>>()) {
+                    tracing::debug!("Matched {} with {} score {}", opid, m, score);
+                    node.metadata.insert(opid, m);                   // inserts Value::String
+                    node.metadata.insert("operation_id", json!(opid)); // inserts Value
+                    break;
+                }
+            }
         }
         /*if let Some(refs) = node.metadata.get(NAME_REFERENCES) {
             println!("{:?}", refs);

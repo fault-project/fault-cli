@@ -1,104 +1,100 @@
 use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path, str::FromStr};
 use std::sync::Arc;
 
-use pulldown_cmark::Parser;
-use pulldown_cmark::TextMergeStream;
-use regex::Regex;
-use rmcp::Error as McpError;
-use rmcp::ServerHandler;
-use rmcp::model::CallToolResult;
-use rmcp::model::Content;
-use rmcp::model::ServerCapabilities;
-use rmcp::model::ServerInfo;
-use rmcp::schemars;
-use rmcp::tool;
-use serde::Deserialize;
-use serde::Serialize;
-use serde_json::json;
+use rmcp::{
+    // Errors + macros + wrappers
+    ErrorData as McpError,
+    handler::server::wrapper::{Json, Parameters},
+    model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
+    schemars::JsonSchema,
+    serde::{Deserialize, Serialize},
+    serde_json::{self, json, Value},
+    tool, tool_handler, tool_router,
+};
 use similar::TextDiff;
+use url::Url;
+
 use swiftide::indexing::EmbeddedField;
 use swiftide::integrations::fastembed::FastEmbed;
 use swiftide::integrations::qdrant::Qdrant;
 use swiftide::query;
-use swiftide::query::answers;
-use swiftide::query::query_transformers;
-use swiftide_core::EmbeddingModel;
-use swiftide_core::SimplePrompt;
-use url::Url;
+use swiftide::query::{answers, query_transformers};
+use swiftide_core::{EmbeddingModel, SimplePrompt};
 
 use crate::agent::CODE_COLLECTION;
-use crate::agent::clients::SupportedLLMClient;
-use crate::agent::clients::get_client;
+use crate::agent::clients::{get_client, SupportedLLMClient};
 use crate::agent::mcp::code;
-use crate::agent::mcp::code::extract_function_snippet;
-use crate::agent::mcp::code::guess_file_language;
-use crate::agent::mcp::code::list_functions;
+use crate::agent::mcp::code::{extract_function_snippet, guess_file_language, list_functions};
 use crate::report;
 use crate::report::types::Report;
 use crate::scenario::executor::run_scenario_first_item;
-use crate::scenario::types::Scenario;
-use crate::scenario::types::ScenarioItem;
-use crate::scenario::types::ScenarioItemCall;
-use crate::scenario::types::ScenarioItemCallStrategy;
-use crate::scenario::types::ScenarioItemContext;
-use crate::scenario::types::ScenarioItemProxySettings;
-use crate::scenario::types::ScenarioItemSLO;
-use crate::types::BandwidthUnit;
-use crate::types::FaultConfiguration;
-use crate::types::StreamSide;
+use crate::scenario::types::{
+    Scenario, ScenarioItem, ScenarioItemCall, ScenarioItemCallStrategy, ScenarioItemContext,
+    ScenarioItemProxySettings, ScenarioItemSLO,
+};
+use crate::types::{BandwidthUnit, FaultConfiguration, StreamSide};
 
-#[derive(Serialize, Deserialize, schemars::JsonSchema)]
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
+
+fn strip_file_scheme(s: &str) -> &str {
+    s.strip_prefix("file://").unwrap_or(s)
+}
+
+fn mcp_internal(ctx: &'static str, e: impl ToString) -> McpError {
+    McpError::internal_error(ctx, Some(serde_json::json!({ "err": e.to_string() })))
+}
+
+fn mcp_invalid(ctx: &'static str, extra: Value) -> McpError {
+    McpError::invalid_params(ctx, Some(extra))
+}
+
+// -----------------------------------------------------------------------------
+// Payloads (shared)
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct CodeBlock {
-    #[schemars(
-        description = "full function block, including its signature and outter decorators"
-    )]
+    #[schemars(description = "Full function block (signature + body + decorators)")]
     pub full: String,
-    #[schemars(description = "full function body only")]
+    #[schemars(description = "Function body only")]
     pub body: String,
 }
 
-#[derive(Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, Default, JsonSchema)]
 pub struct CodeChange {
-    #[schemars(description = "score before the improvements were computed")]
+    #[schemars(description = "Score before changes (optional)")]
     pub score: f64,
-    #[schemars(
-        description = "a short summary of the main threats you found and changes you made"
-    )]
+    #[schemars(description = "Short summary of threats & changes")]
     pub explanation: String,
-    #[schemars(
-        description = "the full content of the file before the changes"
-    )]
+    #[schemars(description = "Full content before")]
     pub old: String,
-    #[schemars(description = "the full content of the file after the changes")]
+    #[schemars(description = "Full content after")]
     pub new: String,
-    #[schemars(
-        description = "a list of dependencies that may be required to install as part of the changes"
-    )]
+    #[schemars(description = "Dependencies to install (if any)")]
     pub dependencies: Vec<String>,
-    #[schemars(description = "the computed unified-diff between old and new")]
+    #[schemars(description = "Unified diff between old and new")]
     pub diff: String,
 }
 
-#[derive(Default, Clone)]
+// -----------------------------------------------------------------------------
+// MCP server struct
+// -----------------------------------------------------------------------------
+
+#[derive(Clone)]
 pub struct FaultMCP {
     pub llm_type: SupportedLLMClient,
     pub prompt_model: String,
     pub embed_model: String,
     pub embed_model_dim: u64,
+
+    // router (generated by #[tool_router] impl below)
+    tool_router: rmcp::handler::server::router::tool::ToolRouter<FaultMCP>,
 }
 
-const PERFORMANCE_TEMPLATE: &str =
-    include_str!("../prompts/tool_eval_code_performance.md");
-const RELIABILITY_TEMPLATE: &str =
-    include_str!("../prompts/tool_eval_code_reliability.md");
-const SCENARIO_TEMPLATE: &str =
-    include_str!("../prompts/tool_eval_code_scenario.md");
-
-#[tool(tool_box)]
 impl FaultMCP {
-    #[allow(dead_code)]
     pub fn new(
         llm_type: SupportedLLMClient,
         prompt_model: &str,
@@ -110,281 +106,309 @@ impl FaultMCP {
             prompt_model: prompt_model.into(),
             embed_model: embed_model.into(),
             embed_model_dim,
+            tool_router: Self::tool_router(),
         }
     }
+}
+
+// -----------------------------------------------------------------------------
+// Tool params / results (per tool)
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct ListFnParams {
+    #[schemars(description = "Absolute path; file:// accepted")]
+    file: String,
+}
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct ListFnResult {
+    names: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct ExtractBlockParams {
+    #[schemars(description = "Absolute path; file:// accepted")]
+    file: String,
+    #[schemars(description = "Function name to extract")]
+    func: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct IndexSourceParams {
+    #[schemars(description = "Directory to index; file:// accepted")]
+    source_dir: String,
+    #[schemars(description = "Language: rust, python, go...")]
+    lang: String,
+}
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct DoneResult {
+    status: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct ScoreParams {
+    #[schemars(description = "Code block / snippet")]
+    snippet: String,
+    #[schemars(description = "Language")]
+    lang: String,
+}
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct ScoreResult {
+    #[schemars(description = "Raw model JSON output")]
+    value: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct SuggestFnParams {
+    #[schemars(description = "Code block / snippet")]
+    snippet: String,
+    #[schemars(description = "Language")]
+    lang: String,
+    #[schemars(description = "Current score 0..1")]
+    score: f64,
+    #[schemars(description = "Target score 0..1")]
+    target_score: f64,
+}
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct DiffResult {
+    diff: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct FullChangesParams {
+    #[schemars(description = "Absolute path; file:// accepted")]
+    file: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct SloParams {
+    #[schemars(description = "Code block / snippet")]
+    snippet: String,
+    #[schemars(description = "Language")]
+    lang: String,
+}
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct TextResult {
+    text: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct ScenarioLatencyParams {
+    url: String,
+    method: String,
+    body: String,
+    duration: String,
+    latency: f64,
+    deviation: f64,
+    direction: String, // ingress|egress
+    side: String,      // client|server
+    per_read_write_op: bool,
+    num_clients: usize,
+    rps: usize,
+    timeout: u64,
+    proxies: Vec<String>,
+}
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct ScenarioBasicParams {
+    url: String,
+    method: String,
+    body: String,
+    duration: String,
+    num_clients: usize,
+    rps: usize,
+    timeout: u64,
+    proxies: Vec<String>,
+
+    // variant-specific
+    // Jitter
+    #[serde(default)]
+    amplitude: f64,
+    #[serde(default)]
+    frequency: f64,
+    // Bandwidth
+    #[serde(default)]
+    rate: u32,
+    #[serde(default)]
+    unit: String,
+    // Direction & side
+    #[serde(default)]
+    direction: String,
+    #[serde(default)]
+    side: String,
+    // HTTP error
+    #[serde(default)]
+    probability: f64,
+    #[serde(default)]
+    status_code: u16,
+    #[serde(default)]
+    error_body: String,
+}
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct ScenarioResult {
+    report: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct DeepAnalysisParams {
+    #[schemars(description = "File absolute path; file:// accepted")]
+    file: String,
+    lang: String,
+    func: String,
+    #[schemars(description = "Subset: performance|reliability|threat")]
+    concerns: Vec<String>,
+}
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct DeepAnalysisResult {
+    evaluations: Vec<String>,
+    prompts: Vec<String>,
+}
+
+// -----------------------------------------------------------------------------
+// Tool router: all tools live here, each takes Parameters<T> and returns Json<T>
+// -----------------------------------------------------------------------------
+
+const PERF_TPL: &str = include_str!("../prompts/tool_score_code_performance.md");
+const REL_TPL: &str = include_str!("../prompts/tool_score_code_reliability.md");
+const SLO_TPL: &str = include_str!("../prompts/tool_suggest_slo.md");
+const SUGG_PERF_TPL: &str = include_str!("../prompts/tool_suggest_perf_improvement.md");
+const SUGG_REL_TPL: &str = include_str!("../prompts/tool_suggest_reliability_improvement.md");
+const FULL_CHANGESET_TPL: &str = include_str!("../prompts/tool_suggest_complete_reliability_changeset.md");
+
+#[tool_router]
+impl FaultMCP {
+    // -------- Code navigation --------
 
     #[tool(
         name = "fault_list_function_names",
-        description = "List all function names in the given source code file"
+        description = "List all function names in a source file"
     )]
-    async fn list_functions(
+    async fn fault_list_function_names(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Absolute local path to a code file")]
-        file: String,
-    ) -> Result<CallToolResult, McpError> {
-        let path = file.strip_prefix("file://").unwrap_or(&file);
-        let src = fs::read_to_string(path).map_err(|e| {
-            McpError::internal_error(
-                "file_read",
-                Some(json!({"err": e.to_string()})),
-            )
-        })?;
+        params: Parameters<ListFnParams>,
+    ) -> Result<Json<ListFnResult>, McpError> {
+        let path = strip_file_scheme(&params.0.file);
+        let src = fs::read_to_string(path).map_err(|e| mcp_internal("file_read", e))?;
 
         let ext = Path::new(path)
             .extension()
             .and_then(|s| s.to_str())
-            .ok_or_else(|| McpError::invalid_params("bad_uri", None))?;
+            .ok_or_else(|| mcp_invalid("bad_uri", json!({ "file": path })))?;
 
         let names = list_functions(&src, ext)
-            .ok_or_else(|| McpError::invalid_params("func_not_found", None))?;
+            .ok_or_else(|| mcp_invalid("func_not_found", json!({ "file": path })))?;
 
-        Ok(CallToolResult::success(vec![Content::json(json!(names)).map_err(
-            |e| {
-                McpError::internal_error(
-                    "file_read",
-                    Some(json!({"err": e.to_string()})),
-                )
-            },
-        )?]))
-    }
-
-    #[tool(
-        name = "fault_index_source_code",
-        description = "Index a source code directory"
-    )]
-    async fn index_source(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Directory of to start indexing from")]
-        source_dir: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Language type of the source: python, rust, go..."
-        )]
-        lang: String,
-    ) -> Result<CallToolResult, McpError> {
-        let path: &str =
-            source_dir.strip_prefix("file://").unwrap_or(&source_dir);
-        let cache_db_path = "/tmp/index.db";
-
-        code::index(
-            path,
-            &lang,
-            cache_db_path,
-            self.llm_type,
-            &self.prompt_model,
-            &self.embed_model,
-            self.embed_model_dim,
-        )
-        .await
-        .map_err(|e| {
-            McpError::internal_error(
-                "code_index",
-                Some(json!({"err": e.to_string()})),
-            )
-        })?;
-
-        Ok(CallToolResult::success(vec![Content::text("done".to_string())]))
+        Ok(Json(ListFnResult { names }))
     }
 
     #[tool(
         name = "fault_extract_code_block",
         description = "Extract function code block by name"
     )]
-    async fn extract_code_block(
+    async fn fault_extract_code_block(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Absolute local path to a code file")]
-        file: String,
-        #[tool(param)]
-        #[schemars(description = "Function name to extract from the file")]
-        func: String,
-    ) -> Result<CallToolResult, McpError> {
-        let path = file.strip_prefix("file://").unwrap_or(&file);
-        let src = fs::read_to_string(path).map_err(|e| {
-            McpError::internal_error(
-                "file_read",
-                Some(json!({"err": e.to_string()})),
-            )
-        })?;
+        params: Parameters<ExtractBlockParams>,
+    ) -> Result<Json<CodeBlock>, McpError> {
+        let path = strip_file_scheme(&params.0.file);
+        let src = fs::read_to_string(path).map_err(|e| mcp_internal("file_read", e))?;
 
         let ext = Path::new(path)
             .extension()
             .and_then(|s| s.to_str())
-            .ok_or_else(|| McpError::invalid_params("bad_uri", None))?;
+            .ok_or_else(|| mcp_invalid("bad_uri", json!({ "file": path })))?;
 
-        let snippet =
-            extract_function_snippet(&src, ext, &func).ok_or_else(|| {
-                McpError::invalid_params(
-                    "func_not_found",
-                    Some(json!({"func": func.clone()})),
-                )
-            })?;
+        let snippet = extract_function_snippet(&src, ext, &params.0.func)
+            .ok_or_else(|| mcp_invalid("func_not_found", json!({ "func": params.0.func })))?;
 
-        let block = CodeBlock { full: snippet.full, body: snippet.body };
-
-        Ok(CallToolResult::success(vec![Content::json(json!(block)).map_err(
-            |e| {
-                McpError::internal_error(
-                    "file_read",
-                    Some(json!({"err": e.to_string()})),
-                )
-            },
-        )?]))
+        Ok(Json(CodeBlock { full: snippet.full, body: snippet.body }))
     }
 
     #[tool(
-        name = "fault_score_performance",
-        description = "Compute a performance score of a code block, snippet or function"
+        name = "fault_index_source_code",
+        description = "Index a source code directory"
     )]
-    async fn score_performance(
+    async fn fault_index_source_code(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Code block to score")]
-        snippet: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Language of the snippet: python, rust, go..."
-        )]
-        lang: String,
-    ) -> Result<CallToolResult, McpError> {
-        let prompt = include_str!("../prompts/tool_score_code_performance.md");
+        params: Parameters<IndexSourceParams>,
+    ) -> Result<Json<DoneResult>, McpError> {
+        code::index(
+            strip_file_scheme(&params.0.source_dir),
+            &params.0.lang,
+            "/tmp/index.db",
+            self.llm_type,
+            &self.prompt_model,
+            &self.embed_model,
+            self.embed_model_dim,
+        )
+        .await
+        .map_err(|e| mcp_internal("code_index", e))?;
 
-        let filled =
-            prompt.replace("{lang}", &lang).replace("{snippet}", &snippet);
+        Ok(Json(DoneResult { status: "done".into() }))
+    }
 
-        let llm =
-            get_client(self.llm_type, &self.prompt_model, &self.embed_model)
-                .map_err(|e| {
-                    McpError::internal_error(
-                        "client_build",
-                        Some(json!({"err": e.to_string()})),
-                    )
-                })?;
+    // -------- Scoring --------
 
-        let answer = llm.prompt(filled.into()).await.map_err(|e| {
-            McpError::internal_error(
-                "llm_prompt",
-                Some(json!({"err": e.to_string()})),
-            )
-        })?;
+    #[tool(
+        name = "fault_score_performance",
+        description = "Compute a performance score for a code snippet"
+    )]
+    async fn fault_score_performance(
+        &self,
+        params: Parameters<ScoreParams>,
+    ) -> Result<Json<ScoreResult>, McpError> {
+        let prompt = PERF_TPL
+            .replace("{lang}", &params.0.lang)
+            .replace("{snippet}", &params.0.snippet);
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&answer).map_err(|e| {
-                McpError::internal_error(
-                    "parse_score_response",
-                    Some(json!({"err": e.to_string()})),
-                )
-            })?;
+        let llm = get_client(self.llm_type, &self.prompt_model, &self.embed_model)
+            .map_err(|e| mcp_internal("client_build", e))?;
 
-        Ok(CallToolResult::success(vec![Content::json(parsed).map_err(
-            |e| {
-                McpError::internal_error(
-                    "score_performance",
-                    Some(json!({"err": e.to_string()})),
-                )
-            },
-        )?]))
+        let answer = llm.prompt(prompt.into()).await.map_err(|e| mcp_internal("llm_prompt", e))?;
+        let parsed: Value = serde_json::from_str(&answer)
+            .map_err(|e| mcp_internal("parse_score_response", e))?;
+
+        Ok(Json(ScoreResult { value: parsed }))
     }
 
     #[tool(
         name = "fault_score_reliability",
-        description = "Compute a reliability score of a code block, snippet or function"
+        description = "Compute a reliability score for a code snippet"
     )]
-    async fn score_reliability(
+    async fn fault_score_reliability(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Code block to score")]
-        snippet: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Language of the snippet: python, rust, go..."
-        )]
-        lang: String,
-    ) -> Result<CallToolResult, McpError> {
-        let prompt = include_str!("../prompts/tool_score_code_reliability.md");
+        params: Parameters<ScoreParams>,
+    ) -> Result<Json<ScoreResult>, McpError> {
+        let prompt = REL_TPL
+            .replace("{lang}", &params.0.lang)
+            .replace("{snippet}", &params.0.snippet);
 
-        let filled =
-            prompt.replace("{lang}", &lang).replace("{snippet}", &snippet);
+        let llm = get_client(self.llm_type, &self.prompt_model, &self.embed_model)
+            .map_err(|e| mcp_internal("client_build", e))?;
 
-        let llm =
-            get_client(self.llm_type, &self.prompt_model, &self.embed_model)
-                .map_err(|e| {
-                    McpError::internal_error(
-                        "client_build",
-                        Some(json!({"err": e.to_string()})),
-                    )
-                })?;
-        let answer = llm.prompt(filled.into()).await.map_err(|e| {
-            McpError::internal_error(
-                "llm_prompt",
-                Some(json!({"err": e.to_string()})),
-            )
-        })?;
+        let answer = llm.prompt(prompt.into()).await.map_err(|e| mcp_internal("llm_prompt", e))?;
+        let parsed: Value = serde_json::from_str(&answer)
+            .map_err(|e| mcp_internal("parse_score_response", e))?;
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&answer).map_err(|e| {
-                McpError::internal_error(
-                    "parse_score_response",
-                    Some(json!({"err": e.to_string()})),
-                )
-            })?;
-
-        Ok(CallToolResult::success(vec![Content::json(parsed).map_err(
-            |e| {
-                McpError::internal_error(
-                    "score_reliability",
-                    Some(json!({"err": e.to_string()})),
-                )
-            },
-        )?]))
+        Ok(Json(ScoreResult { value: parsed }))
     }
 
-    /// Suggest a diff to improve performance from current to target score
+    // -------- Suggestions (diffs) --------
+
     #[tool(
         name = "fault_suggest_better_function_performance",
-        description = "Generate a unified diff which improves the code's performance"
+        description = "Generate a unified diff to improve performance"
     )]
-    async fn suggest_performance_improvement(
+    async fn fault_suggest_better_function_performance(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Code block to review")]
-        snippet: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Language of the code block: python, rust, go..."
-        )]
-        lang: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Current score for the code block: 0.0 (worst) to 1.0 (best)"
-        )]
-        score: f64,
-        #[tool(param)]
-        #[schemars(
-            description = "Target score to try to reach from the changes: 0.0 (worst) to 1.0 (best)"
-        )]
-        target_score: f64,
-    ) -> Result<CallToolResult, McpError> {
-        let prompt =
-            include_str!("../prompts/tool_suggest_perf_improvement.md");
+        params: Parameters<SuggestFnParams>,
+    ) -> Result<Json<DiffResult>, McpError> {
+        let prompt = SUGG_PERF_TPL
+            .replace("{lang}", &params.0.lang)
+            .replace("{snippet}", &params.0.snippet)
+            .replace("{score}", &params.0.score.to_string())
+            .replace("{target_score}", &params.0.target_score.to_string());
 
-        let filled = prompt
-            .replace("{lang}", &lang)
-            .replace("{snippet}", &snippet)
-            .replace("{score}", &score.to_string())
-            .replace("{target_score}", &target_score.to_string());
-
-        let llm =
-            get_client(self.llm_type, &self.prompt_model, &self.embed_model)
-                .map_err(|e| {
-                    McpError::internal_error(
-                        "client_build",
-                        Some(json!({"err": e.to_string()})),
-                    )
-                })?;
-
+        let llm = get_client(self.llm_type, &self.prompt_model, &self.embed_model)
+            .map_err(|e| mcp_internal("client_build", e))?;
         let sp: Arc<dyn SimplePrompt> = llm.clone();
         let em: Arc<dyn EmbeddingModel> = llm.clone();
 
@@ -395,83 +419,33 @@ impl FaultMCP {
             .with_sparse_vector(EmbeddedField::Combined)
             .collection_name(CODE_COLLECTION)
             .build()
-            .map_err(|e| {
-                McpError::internal_error(
-                    "qdrant_builder",
-                    Some(json!({"err": e.to_string()})),
-                )
-            })?;
+            .map_err(|e| mcp_internal("qdrant_builder", e))?;
 
         let pipeline = query::Pipeline::default()
-            .then_transform_query(query_transformers::Embed::from_client(
-                em.clone(),
-            ))
+            .then_transform_query(query_transformers::Embed::from_client(em.clone()))
             .then_retrieve(qdrant.clone())
             .then_answer(answers::Simple::from_client(sp.clone()));
 
-        let q: String = filled.into();
-        let resp = pipeline.query(q).await.map_err(|e| {
-            McpError::internal_error(
-                "query",
-                Some(json!({"err": e.to_string()})),
-            )
-        })?;
-        let diff = resp.answer().to_string();
-
-        /*let diff = llm.prompt(filled.into()).await.map_err(|e| {
-            McpError::internal_error(
-                "llm_prompt",
-                Some(json!({"err": e.to_string()})),
-            )
-        })?;*/
-
-        Ok(CallToolResult::success(vec![Content::text(diff)]))
+        let resp = pipeline.query(prompt).await.map_err(|e| mcp_internal("query", e))?;
+        Ok(Json(DiffResult { diff: resp.answer().to_string() }))
     }
 
-    /// Suggest a diff to improve reliability from current to target score
     #[tool(
         name = "fault_suggest_better_function_reliability",
-        description = "Generate a unified diff which improves the code's reliability"
+        description = "Generate a unified diff to improve reliability"
     )]
-    async fn suggest_reliability_improvement(
+    async fn fault_suggest_better_function_reliability(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Code block to review")]
-        snippet: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Language of the code block: python, rust, go..."
-        )]
-        lang: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Current score for the code block: 0.0 (worst) to 1.0 (best)"
-        )]
-        score: f64,
-        #[tool(param)]
-        #[schemars(
-            description = "Target score to try to reach from the changes: 0.0 (worst) to 1.0 (best)"
-        )]
-        target_score: f64,
-    ) -> Result<CallToolResult, McpError> {
-        let prompt =
-            include_str!("../prompts/tool_suggest_reliability_improvement.md");
+        params: Parameters<SuggestFnParams>,
+    ) -> Result<Json<DiffResult>, McpError> {
+        let prompt = SUGG_REL_TPL
+            .replace("{lang}", &params.0.lang)
+            .replace("{snippet}", &params.0.snippet)
+            .replace("{score}", &params.0.score.to_string())
+            .replace("{target_score}", &params.0.target_score.to_string());
 
-        let filled = prompt
-            .replace("{lang}", &lang)
-            .replace("{snippet}", &snippet)
-            .replace("{score}", &score.to_string())
-            .replace("{target_score}", &target_score.to_string());
-
-        let llm =
-            get_client(self.llm_type, &self.prompt_model, &self.embed_model)
-                .map_err(|e| {
-                    McpError::internal_error(
-                        "client_build",
-                        Some(json!({"err": e.to_string()})),
-                    )
-                })?;
-
+        let llm = get_client(self.llm_type, &self.prompt_model, &self.embed_model)
+            .map_err(|e| mcp_internal("client_build", e))?;
         let sp: Arc<dyn SimplePrompt> = llm.clone();
         let em: Arc<dyn EmbeddingModel> = llm.clone();
 
@@ -482,781 +456,288 @@ impl FaultMCP {
             .with_sparse_vector(EmbeddedField::Combined)
             .collection_name(CODE_COLLECTION)
             .build()
-            .map_err(|e| {
-                McpError::internal_error(
-                    "qdrant_builder",
-                    Some(json!({"err": e.to_string()})),
-                )
-            })?;
+            .map_err(|e| mcp_internal("qdrant_builder", e))?;
 
         let pipeline = query::Pipeline::default()
-            .then_transform_query(query_transformers::Embed::from_client(
-                em.clone(),
-            ))
+            .then_transform_query(query_transformers::Embed::from_client(em.clone()))
             .then_retrieve(qdrant.clone())
             .then_answer(answers::Simple::from_client(sp.clone()));
 
-        let q: String = filled.into();
-        let resp = pipeline.query(q).await.map_err(|e| {
-            McpError::internal_error(
-                "query",
-                Some(json!({"err": e.to_string()})),
-            )
-        })?;
-        let diff = resp.answer().to_string();
-
-        /*
-        let diff = llm.prompt(filled.into()).await.map_err(|e| {
-            McpError::internal_error(
-                "llm_prompt",
-                Some(json!({"err": e.to_string()})),
-            )
-        })?;*/
-
-        Ok(CallToolResult::success(vec![Content::text(diff)]))
+        let resp = pipeline.query(prompt).await.map_err(|e| mcp_internal("query", e))?;
+        Ok(Json(DiffResult { diff: resp.answer().to_string() }))
     }
 
-    /// Suggest changes for a whole file
     #[tool(
         name = "fault_make_reliability_and_perf_changes",
-        description = "Generate a unified diff patch for a source code file to improve reliability and performance"
+        description = "Generate a unified diff patch for a source file"
     )]
-    async fn suggest_code_changes(
+    async fn fault_make_reliability_and_perf_changes(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Absolute local path to a code file")]
-        file: String,
-    ) -> Result<CallToolResult, McpError> {
-        let prompt = include_str!(
-            "../prompts/tool_suggest_complete_reliability_changeset.md"
-        );
+        params: Parameters<FullChangesParams>,
+    ) -> Result<Json<CodeChange>, McpError> {
+        let path = strip_file_scheme(&params.0.file);
+        let lang = guess_file_language(path).map_err(|e| mcp_internal("guess_file_language", e))?;
+        let snippet = fs::read_to_string(path).map_err(|e| mcp_internal("read_file", e))?;
 
-        let lang = guess_file_language(&file)?;
+        let prompt = FULL_CHANGESET_TPL
+            .replace("{lang}", &lang)
+            .replace("{snippet}", &snippet);
 
-        let snippet = fs::read_to_string(&file).map_err(|e| {
-            McpError::internal_error(
-                "read_file",
-                Some(json!({"err": e.to_string()})),
-            )
-        })?;
-
-        let filled =
-            prompt.replace("{lang}", &lang).replace("{snippet}", &snippet);
-
-        let llm =
-            get_client(self.llm_type, &self.prompt_model, &self.embed_model)
-                .map_err(|e| {
-                    McpError::internal_error(
-                        "client_build",
-                        Some(json!({"err": e.to_string()})),
-                    )
-                })?;
-
-        let sp: Arc<dyn SimplePrompt> = llm.clone();
-        let em: Arc<dyn EmbeddingModel>;
-
-        if self.llm_type == SupportedLLMClient::OpenRouter {
-            em = Arc::new(FastEmbed::try_default().unwrap().to_owned());
-        } else if self.llm_type == SupportedLLMClient::Gemini {
-            em = Arc::new(FastEmbed::try_default().unwrap().to_owned());
-        } else {
-            em = llm.clone();
-        }
-
-        let qdrant: Qdrant = Qdrant::builder()
-            .batch_size(50)
-            .vector_size(self.embed_model_dim)
-            .with_vector(EmbeddedField::Combined)
-            .with_sparse_vector(EmbeddedField::Combined)
-            .collection_name(CODE_COLLECTION)
-            .build()
-            .map_err(|e| {
-                McpError::internal_error(
-                    "qdrant_builder",
-                    Some(json!({"err": e.to_string()})),
-                )
-            })?;
-
-        let pipeline = query::Pipeline::default()
-            .then_transform_query(query_transformers::Embed::from_client(
-                em.clone(),
-            ))
-            .then_retrieve(qdrant.clone())
-            .then_answer(answers::Simple::from_client(sp.clone()));
-
-        let q: String = filled.into();
-        let resp = pipeline.query(q).await.map_err(|e| {
-            McpError::internal_error(
-                "query",
-                Some(json!({"err": e.to_string()})),
-            )
-        })?;
-
-        let answer = resp.answer().to_string();
-        tracing::debug!("LLM replied with: {}", answer);
+        let llm = get_client(self.llm_type, &self.prompt_model, &self.embed_model)
+            .map_err(|e| mcp_internal("client_build", e))?;
+        let answer = llm.prompt(prompt.into()).await.map_err(|e| mcp_internal("llm_prompt", e))?;
 
         let mut parsed = CodeChange::default();
-
         if let Some(code) = code::extract_json_fence(&answer) {
-            parsed = serde_json::from_str(&code).map_err(|e| {
-                McpError::internal_error(
-                    "parse_code_change",
-                    Some(json!({"err": e.to_string()})),
-                )
-            })?;
+            parsed = serde_json::from_str(&code).map_err(|e| mcp_internal("parse_code_change", e))?;
 
-            let filename = Path::new(&file)
-                .file_name()
-                .and_then(|os_str| os_str.to_str())
-                .unwrap();
-
-            let old_text = snippet;
-            let new_text = &parsed.new;
-            let text_diff = TextDiff::from_lines(&old_text, &new_text);
-            parsed.diff = text_diff
+            let filename = Path::new(path).file_name().and_then(|os| os.to_str()).unwrap_or("file");
+            parsed.diff = TextDiff::from_lines(&snippet, &parsed.new)
                 .unified_diff()
                 .context_radius(10)
                 .header(filename, filename)
                 .to_string();
         }
 
-        Ok(CallToolResult::success(vec![Content::json(parsed).map_err(
-            |e| {
-                McpError::internal_error(
-                    "sugget_changes",
-                    Some(json!({"err": e.to_string()})),
-                )
-            },
-        )?]))
+        Ok(Json(parsed))
     }
 
     #[tool(
         name = "fault_suggest_service_level_objectives_slo",
-        description = "Generate valuable SLOs for a code snippet"
+        description = "Suggest SLOs for a code snippet"
     )]
-    async fn suggest_slo(
+    async fn fault_suggest_service_level_objectives_slo(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Code block to review")]
-        snippet: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Language of the code block: python, rust, go..."
-        )]
-        lang: String,
-    ) -> Result<CallToolResult, McpError> {
-        let prompt = include_str!("../prompts/tool_suggest_slo.md");
+        params: Parameters<SloParams>,
+    ) -> Result<Json<TextResult>, McpError> {
+        let prompt = SLO_TPL
+            .replace("{lang}", &params.0.lang)
+            .replace("{snippet}", &params.0.snippet);
 
-        let filled =
-            prompt.replace("{lang}", &lang).replace("{snippet}", &snippet);
+        let llm = get_client(self.llm_type, &self.prompt_model, &self.embed_model)
+            .map_err(|e| mcp_internal("client_build", e))?;
+        let answer = llm.prompt(prompt.into()).await.map_err(|e| mcp_internal("llm_prompt", e))?;
 
-        let llm =
-            get_client(self.llm_type, &self.prompt_model, &self.embed_model)
-                .map_err(|e| {
-                    McpError::internal_error(
-                        "client_build",
-                        Some(json!({"err": e.to_string()})),
-                    )
-                })?;
-        let diff = llm.prompt(filled.into()).await.map_err(|e| {
-            McpError::internal_error(
-                "llm_prompt",
-                Some(json!({"err": e.to_string()})),
-            )
-        })?;
-
-        Ok(CallToolResult::success(vec![Content::text(diff)]))
+        Ok(Json(TextResult { text: answer }))
     }
+
+    // -------- Scenarios --------
 
     #[tool(
         name = "fault_run_latency_impact_scenario",
-        description = "Measure the impact of increased latency on response time"
+        description = "Measure impact of increased latency on response time"
     )]
-    async fn run_latency_scenario(
+    async fn fault_run_latency_impact_scenario(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Endpoint URL")]
-        url: String,
-        #[tool(param)]
-        #[schemars(description = "Endpoint HTTP method")]
-        method: String,
-        #[tool(param)]
-        #[schemars(
-            description = "JSON-encoded string to pass as a the body when method has one. Leave empty to not set it. When set, the content-type will be set to application/json."
-        )]
-        body: String,
-        #[tool(param)]
-        #[schemars(description = "Duration of the run: 10s, 30s, 1m...")]
-        duration: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Latency to introduce in milliseconds, e.g. 300"
-        )]
-        latency: f64,
-        #[tool(param)]
-        #[schemars(
-            description = "Latency standard deviation in milliseconds. Set 0 to stick to the latency without variation"
-        )]
-        deviation: f64,
-        #[tool(param)]
-        #[schemars(
-            description = "Direction on which to apply the latency, one of ingress or egress. A good default is to use ingress."
-        )]
-        direction: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Network side on which applying the latency, one of client or server. A good default is to use server."
-        )]
-        side: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Apply the latency every time data is written or read on the stream. The default is to apply the fault once only over the entire course of the stream.."
-        )]
-        per_read_write_op: bool,
-        #[tool(param)]
-        #[schemars(description = "Number of concurrent clients, e..g. 1")]
-        num_clients: usize,
-        #[tool(param)]
-        #[schemars(description = "Request per second, e.g. 2")]
-        rps: usize,
-        #[tool(param)]
-        #[schemars(
-            description = "Client timeout in seconds to apply on calls made to your application"
-        )]
-        timeout: u64,
-        #[tool(param)]
-        #[schemars(
-            description = "List of mapping to map local ports to remote addresses. The target url will always be set by default but you can add more. Proxies look like: PORT=REMOTE_HOST"
-        )]
-        proxies: Vec<String>,
-    ) -> Result<CallToolResult, McpError> {
-        let stream_side = if side == "client".to_owned() {
-            StreamSide::Client
-        } else {
-            StreamSide::Server
-        };
-
+        params: Parameters<ScenarioLatencyParams>,
+    ) -> Result<Json<ScenarioResult>, McpError> {
+        let stream_side = if params.0.side == "client" { StreamSide::Client } else { StreamSide::Server };
         let fault = FaultConfiguration::Latency {
             distribution: Some("normal".to_string()),
-            global: Some(!per_read_write_op),
+            global: Some(!params.0.per_read_write_op),
             side: Some(stream_side),
-            mean: Some(latency),
-            stddev: Some(deviation),
-            min: None,
-            max: None,
-            shape: None,
-            scale: None,
-            direction: Some(direction),
+            mean: Some(params.0.latency),
+            stddev: Some(params.0.deviation),
+            min: None, max: None, shape: None, scale: None,
+            direction: Some(params.0.direction),
             period: None,
         };
 
         let report = run_scenario(
-            url,
-            method,
-            body,
-            duration,
-            fault,
-            num_clients,
-            rps,
-            timeout,
-            proxies,
-        )
-        .await?;
+            params.0.url, params.0.method, params.0.body, params.0.duration,
+            fault, params.0.num_clients, params.0.rps, params.0.timeout, params.0.proxies,
+        ).await?;
 
-        Ok(CallToolResult::success(vec![Content::text(report.render())]))
+        Ok(Json(ScenarioResult { report: report.render() }))
     }
 
     #[tool(
         name = "fault_run_jitter_impact_scenario",
-        description = "Measure the impact of jitter on response time"
+        description = "Measure impact of jitter on response time"
     )]
-    async fn run_jitter_scenario(
+    async fn fault_run_jitter_impact_scenario(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Endpoint URL")]
-        url: String,
-        #[tool(param)]
-        #[schemars(description = "Endpoint HTTP method")]
-        method: String,
-        #[tool(param)]
-        #[schemars(
-            description = "JSON-encoded string to pass as a the body when method has one. Leave empty to not set it. When set, the content-type will be set to application/json."
-        )]
-        body: String,
-        #[tool(param)]
-        #[schemars(description = "Duration of the run: 10s, 30s, 1m...")]
-        duration: String,
-        #[tool(param)]
-        #[schemars(description = "Amplitude in milliseconds, e.g. 100")]
-        amplitude: f64,
-        #[tool(param)]
-        #[schemars(
-            description = "Frequency per second (Hertz) to which the jitter should be applied, e.g. 3"
-        )]
-        frequency: f64,
-        #[tool(param)]
-        #[schemars(
-            description = "Direction on which to apply the jitter, one of ingress or egress. A good default is to use ingress."
-        )]
-        direction: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Network side on which applying the jitter, one of client or server. A good default is to use server."
-        )]
-        side: String,
-        #[tool(param)]
-        #[schemars(description = "Number of concurrent clients, e..g. 1")]
-        num_clients: usize,
-        #[tool(param)]
-        #[schemars(description = "Request per second, e.g. 2")]
-        rps: usize,
-        #[tool(param)]
-        #[schemars(
-            description = "Client timeout in seconds to apply on calls made to your application"
-        )]
-        timeout: u64,
-        #[tool(param)]
-        #[schemars(
-            description = "List of mapping to map local ports to remote addresses. The target url will always be set by default but you can add more. Proxies look like: PORT=REMOTE_HOST"
-        )]
-        proxies: Vec<String>,
-    ) -> Result<CallToolResult, McpError> {
-        let stream_side = if side == "client".to_owned() {
-            StreamSide::Client
-        } else {
-            StreamSide::Server
-        };
-
+        params: Parameters<ScenarioBasicParams>,
+    ) -> Result<Json<ScenarioResult>, McpError> {
+        let stream_side = if params.0.side == "client" { StreamSide::Client } else { StreamSide::Server };
         let fault = FaultConfiguration::Jitter {
-            amplitude: amplitude,
-            frequency: frequency,
-            direction: Some(direction),
+            amplitude: params.0.amplitude,
+            frequency: params.0.frequency,
+            direction: Some(params.0.direction),
             side: Some(stream_side),
             period: None,
         };
 
         let report = run_scenario(
-            url,
-            method,
-            body,
-            duration,
-            fault,
-            num_clients,
-            rps,
-            timeout,
-            proxies,
-        )
-        .await?;
+            params.0.url, params.0.method, params.0.body, params.0.duration,
+            fault, params.0.num_clients, params.0.rps, params.0.timeout, params.0.proxies,
+        ).await?;
 
-        Ok(CallToolResult::success(vec![Content::text(report.render())]))
+        Ok(Json(ScenarioResult { report: report.render() }))
     }
 
     #[tool(
         name = "fault_run_bandwidth_impact_scenario",
-        description = "Measure the impact of bandwidth constraints on response time and behavior"
+        description = "Measure impact of bandwidth constraints"
     )]
-    async fn run_bandwidth_scenario(
+    async fn fault_run_bandwidth_impact_scenario(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Endpoint URL")]
-        url: String,
-        #[tool(param)]
-        #[schemars(description = "Endpoint HTTP method")]
-        method: String,
-        #[tool(param)]
-        #[schemars(
-            description = "JSON-encoded string to pass as a the body when method has one. Leave empty to not set it. When set, the content-type will be set to application/json."
-        )]
-        body: String,
-        #[tool(param)]
-        #[schemars(description = "Duration of the run: 10s, 30s, 1m...")]
-        duration: String,
-        #[tool(param)]
-        #[schemars(description = "Bandwidth rate to restrict traffic to: 300")]
-        rate: u32,
-        #[tool(param)]
-        #[schemars(description = "Bandwidth limit: e.g. Kbps, Bps")]
-        unit: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Direction on which to apply the bandwidth, one of ingress or egress. A good default is to use ingress."
-        )]
-        direction: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Network side on which applying the bandwidth, one of client or server. A good default is to use server."
-        )]
-        side: String,
-        #[tool(param)]
-        #[schemars(description = "Number of concurrent clients, e..g. 1")]
-        num_clients: usize,
-        #[tool(param)]
-        #[schemars(description = "Request per second, e.g. 2")]
-        rps: usize,
-        #[tool(param)]
-        #[schemars(
-            description = "Client timeout in seconds to apply on calls made to your application"
-        )]
-        timeout: u64,
-        #[tool(param)]
-        #[schemars(
-            description = "List of mapping to map local ports to remote addresses. The target url will always be set by default but you can add more. Proxies look like: PORT=REMOTE_HOST"
-        )]
-        proxies: Vec<String>,
-    ) -> Result<CallToolResult, McpError> {
-        let stream_side = if side == "client".to_owned() {
-            StreamSide::Client
-        } else {
-            StreamSide::Server
-        };
-
+        params: Parameters<ScenarioBasicParams>,
+    ) -> Result<Json<ScenarioResult>, McpError> {
+        let stream_side = if params.0.side == "client" { StreamSide::Client } else { StreamSide::Server };
         let fault = FaultConfiguration::Bandwidth {
-            rate: rate,
-            unit: BandwidthUnit::from_str(&unit).unwrap_or_default(),
-            direction: Some(direction),
+            rate: params.0.rate,
+            unit: BandwidthUnit::from_str(&params.0.unit).unwrap_or_default(),
+            direction: Some(params.0.direction),
             side: Some(stream_side),
             period: None,
         };
 
         let report = run_scenario(
-            url,
-            method,
-            body,
-            duration,
-            fault,
-            num_clients,
-            rps,
-            timeout,
-            proxies,
-        )
-        .await?;
+            params.0.url, params.0.method, params.0.body, params.0.duration,
+            fault, params.0.num_clients, params.0.rps, params.0.timeout, params.0.proxies,
+        ).await?;
 
-        Ok(CallToolResult::success(vec![Content::text(report.render())]))
+        Ok(Json(ScenarioResult { report: report.render() }))
     }
 
     #[tool(
         name = "fault_run_packet_loss_impact_scenario",
-        description = "Measure the impact of packet loss on response time and behavior"
+        description = "Measure impact of packet loss"
     )]
-    async fn run_packet_loss_scenario(
+    async fn fault_run_packet_loss_impact_scenario(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Endpoint URL")]
-        url: String,
-        #[tool(param)]
-        #[schemars(description = "Endpoint HTTP method")]
-        method: String,
-        #[tool(param)]
-        #[schemars(
-            description = "JSON-encoded string to pass as a the body when method has one. Leave empty to not set it. When set, the content-type will be set to application/json."
-        )]
-        body: String,
-        #[tool(param)]
-        #[schemars(description = "Duration of the run: 10s, 30s, 1m...")]
-        duration: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Direction on which to apply the packet loss, one of ingress or egress. A good default is to use ingress."
-        )]
-        direction: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Network side on which applying the packet loss, one of client or server. A good default is to use server."
-        )]
-        side: String,
-        #[tool(param)]
-        #[schemars(description = "Number of concurrent clients, e..g. 1")]
-        num_clients: usize,
-        #[tool(param)]
-        #[schemars(description = "Request per second, e.g. 2")]
-        rps: usize,
-        #[tool(param)]
-        #[schemars(
-            description = "Client timeout in seconds to apply on calls made to your application"
-        )]
-        timeout: u64,
-        #[tool(param)]
-        #[schemars(
-            description = "List of mapping to map local ports to remote addresses. The target url will always be set by default but you can add more. Proxies look like: PORT=REMOTE_HOST"
-        )]
-        proxies: Vec<String>,
-    ) -> Result<CallToolResult, McpError> {
-        let stream_side = if side == "client".to_owned() {
-            StreamSide::Client
-        } else {
-            StreamSide::Server
-        };
-
+        params: Parameters<ScenarioBasicParams>,
+    ) -> Result<Json<ScenarioResult>, McpError> {
+        let stream_side = if params.0.side == "client" { StreamSide::Client } else { StreamSide::Server };
         let fault = FaultConfiguration::PacketLoss {
-            direction: Some(direction),
+            direction: Some(params.0.direction),
             side: Some(stream_side),
             period: None,
         };
 
         let report = run_scenario(
-            url,
-            method,
-            body,
-            duration,
-            fault,
-            num_clients,
-            rps,
-            timeout,
-            proxies,
-        )
-        .await?;
+            params.0.url, params.0.method, params.0.body, params.0.duration,
+            fault, params.0.num_clients, params.0.rps, params.0.timeout, params.0.proxies,
+        ).await?;
 
-        Ok(CallToolResult::success(vec![Content::text(report.render())]))
+        Ok(Json(ScenarioResult { report: report.render() }))
     }
 
     #[tool(
         name = "fault_run_http_error_impact_scenario",
-        description = "Measure the impact of HTTP error on response time and behavior"
+        description = "Measure impact of HTTP errors"
     )]
-    async fn run_http_error_scenario(
+    async fn fault_run_http_error_impact_scenario(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Endpoint URL")]
-        url: String,
-        #[tool(param)]
-        #[schemars(description = "Endpoint HTTP method")]
-        method: String,
-        #[tool(param)]
-        #[schemars(
-            description = "JSON-encoded string to pass as the request body when method has one. Leave empty to not set it. When set, the content-type will be set to application/json."
-        )]
-        body: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Probability, between 0.0 and 1.0, on how often the error is set."
-        )]
-        probability: f64,
-        #[tool(param)]
-        #[schemars(description = "Response status code.")]
-        status_code: u16,
-        #[tool(param)]
-        #[schemars(description = "Response body to set.")]
-        error_body: String,
-        #[tool(param)]
-        #[schemars(description = "Duration of the run: 10s, 30s, 1m...")]
-        duration: String,
-        #[tool(param)]
-        #[schemars(description = "Number of concurrent clients, e..g. 1")]
-        num_clients: usize,
-        #[tool(param)]
-        #[schemars(description = "Request per second, e.g. 2")]
-        rps: usize,
-        #[tool(param)]
-        #[schemars(
-            description = "Client timeout in seconds to apply on calls made to your application"
-        )]
-        timeout: u64,
-        #[tool(param)]
-        #[schemars(
-            description = "List of mapping to map local ports to remote addresses. The target url will always be set by default but you can add more. Proxies look like: PORT=https://REMOTE_HOST:REMOTE_PORT"
-        )]
-        proxies: Vec<String>,
-    ) -> Result<CallToolResult, McpError> {
+        params: Parameters<ScenarioBasicParams>,
+    ) -> Result<Json<ScenarioResult>, McpError> {
         let fault = FaultConfiguration::HttpError {
-            status_code: status_code,
-            body: Some(error_body),
-            probability: probability,
+            status_code: params.0.status_code,
+            body: Some(params.0.error_body),
+            probability: params.0.probability,
             period: None,
         };
-        let report = run_scenario(
-            url,
-            method,
-            body,
-            duration,
-            fault,
-            num_clients,
-            rps,
-            timeout,
-            proxies,
-        )
-        .await?;
 
-        Ok(CallToolResult::success(vec![Content::text(report.render())]))
+        let report = run_scenario(
+            params.0.url, params.0.method, params.0.body, params.0.duration,
+            fault, params.0.num_clients, params.0.rps, params.0.timeout, params.0.proxies,
+        ).await?;
+
+        Ok(Json(ScenarioResult { report: report.render() }))
     }
 
     #[tool(
         name = "fault_run_blackhole_impact_scenario",
-        description = "Measure the impact of network blackhole response time and behavior"
+        description = "Measure impact of a network blackhole"
     )]
-    async fn run_blackhole_scenario(
+    async fn fault_run_blackhole_impact_scenario(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Endpoint URL")]
-        url: String,
-        #[tool(param)]
-        #[schemars(description = "Endpoint HTTP method")]
-        method: String,
-        #[tool(param)]
-        #[schemars(
-            description = "JSON-encoded string to pass as the request body when method has one. Leave empty to not set it. When set, the content-type will be set to application/json."
-        )]
-        body: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Direction on which to apply the packet loss, one of ingress or egress. A good default is to use ingress."
-        )]
-        direction: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Network side on which applying the packet loss, one of client or server. A good default is to use server."
-        )]
-        side: String,
-        #[tool(param)]
-        #[schemars(description = "Duration of the run: 10s, 30s, 1m...")]
-        duration: String,
-        #[tool(param)]
-        #[schemars(description = "Number of concurrent clients, e..g. 1")]
-        num_clients: usize,
-        #[tool(param)]
-        #[schemars(description = "Request per second, e.g. 2")]
-        rps: usize,
-        #[tool(param)]
-        #[schemars(
-            description = "Client timeout in seconds to apply on calls made to your application"
-        )]
-        timeout: u64,
-        #[tool(param)]
-        #[schemars(
-            description = "List of mapping to map local ports to remote addresses. The target url will always be set by default but you can add more. Proxies look like: PORT=REMOTE_HOST"
-        )]
-        proxies: Vec<String>,
-    ) -> Result<CallToolResult, McpError> {
-        let stream_side = if side == "client".to_owned() {
-            StreamSide::Client
-        } else {
-            StreamSide::Server
-        };
-
+        params: Parameters<ScenarioBasicParams>,
+    ) -> Result<Json<ScenarioResult>, McpError> {
+        let stream_side = if params.0.side == "client" { StreamSide::Client } else { StreamSide::Server };
         let fault = FaultConfiguration::Blackhole {
-            direction: Some(direction),
+            direction: Some(params.0.direction),
             side: Some(stream_side),
             period: None,
         };
 
         let report = run_scenario(
-            url,
-            method,
-            body,
-            duration,
-            fault,
-            num_clients,
-            rps,
-            timeout,
-            proxies,
-        )
-        .await?;
+            params.0.url, params.0.method, params.0.body, params.0.duration,
+            fault, params.0.num_clients, params.0.rps, params.0.timeout, params.0.proxies,
+        ).await?;
 
-        Ok(CallToolResult::success(vec![Content::text(report.render())]))
+        Ok(Json(ScenarioResult { report: report.render() }))
     }
 
     #[tool(
         name = "fault_function_reliability_deep_analysis",
-        description = "Deep evaluation of reliability anti-patterns of a function"
+        description = "Deep evaluation of a function (reliability/perf/threat)"
     )]
-    async fn evaluate_code_lite(
+    async fn fault_function_reliability_deep_analysis(
         &self,
-        #[tool(param)]
-        #[schemars(description = "Source code file absolute path")]
-        file: String,
-        #[tool(param)]
-        #[schemars(description = "Language of the file: python, rust, go...")]
-        lang: String,
-        #[tool(param)]
-        #[schemars(description = "Function name to review")]
-        func: String,
-        #[tool(param)]
-        #[schemars(
-            description = "Concerns to focus on: performance, reliability, threat"
-        )]
-        concerns: Vec<String>,
-    ) -> Result<CallToolResult, McpError> {
-        let ext = Path::new(&file).extension().ok_or_else(|| {
-            McpError::internal_error(
-                "file_ext_not_found",
-                Some(json!({"func": func.clone()})),
-            )
-        })?;
+        params: Parameters<DeepAnalysisParams>,
+    ) -> Result<Json<DeepAnalysisResult>, McpError> {
+        let path = strip_file_scheme(&params.0.file);
+        let src = fs::read_to_string(path).map_err(|e| mcp_internal("file_read", e))?;
 
-        let src = fs::read_to_string(&file).map_err(|e| {
-            McpError::internal_error(
-                "file_read",
-                Some(json!({"err": e.to_string()})),
-            )
-        })?;
+        let ext = Path::new(path)
+            .extension()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| mcp_internal("file_ext_not_found", path))?;
 
-        let snippet =
-            extract_function_snippet(&src, ext.to_str().unwrap(), &func)
-                .ok_or_else(|| {
-                    McpError::internal_error(
-                        "func_not_found",
-                        Some(json!({"func": func.clone()})),
-                    )
-                })?;
+        let snippet = extract_function_snippet(&src, ext, &params.0.func)
+            .ok_or_else(|| mcp_invalid("func_not_found", json!({ "func": params.0.func })))?;
 
-        let llm =
-            get_client(self.llm_type, &self.prompt_model, &self.embed_model)
-                .map_err(|e| {
-                    McpError::internal_error(
-                        "client_build",
-                        Some(json!({"err": e.to_string()})),
-                    )
-                })?;
+        let llm = get_client(self.llm_type, &self.prompt_model, &self.embed_model)
+            .map_err(|e| mcp_internal("client_build", e))?;
 
         let templates = vec![
-            ("performance", PERFORMANCE_TEMPLATE),
-            ("reliability", RELIABILITY_TEMPLATE),
-            ("threat", SCENARIO_TEMPLATE),
+            ("performance", include_str!("../prompts/tool_eval_code_performance.md")),
+            ("reliability", include_str!("../prompts/tool_eval_code_reliability.md")),
+            ("threat",      include_str!("../prompts/tool_eval_code_scenario.md")),
         ];
 
-        let mut results: Vec<String> = Vec::new();
+        let mut evaluations = Vec::new();
         let mut prompts = Vec::new();
 
         for (angle, tmpl) in templates {
-            if !concerns.is_empty() {
-                if !concerns.contains(&angle.to_string()) {
-                    continue;
-                }
+            if !params.0.concerns.is_empty() && !params.0.concerns.iter().any(|c| c == angle) {
+                continue;
             }
-
             let prompt = tmpl
-                .replace("{file}", &file)
-                .replace("{func}", &func)
+                .replace("{file}", path)
+                .replace("{func}", &params.0.func)
                 .replace("{snippet}", &snippet.full)
-                .replace("{lang}", &lang);
-
-            prompts.push(prompt.clone());
-
-            let answer = llm.prompt(prompt.into()).await.map_err(|e| {
-                McpError::internal_error(
-                    "llm_prompt",
-                    Some(json!({"err": e.to_string()})),
-                )
-            })?;
-
-            results.push(answer);
+                .replace("{lang}", &params.0.lang);
+            let answer = llm.prompt(prompt.clone().into()).await
+                .map_err(|e| mcp_internal("llm_prompt", e))?;
+            prompts.push(prompt);
+            evaluations.push(answer);
         }
 
-        let payload = json!({ "evaluations": results , "prompts": prompts });
-
-        Ok(CallToolResult::success(vec![Content::text(payload.to_string())]))
+        Ok(Json(DeepAnalysisResult { evaluations, prompts }))
     }
 }
 
-#[tool(tool_box)]
-impl ServerHandler for FaultMCP {
+// -----------------------------------------------------------------------------
+// Hook the router into the server
+// -----------------------------------------------------------------------------
+
+#[tool_handler]
+impl rmcp::ServerHandler for FaultMCP {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
-            instructions: Some("Senior AI Agent for your operations".into()),
+            instructions: Some("Fault — reliability & performance MCP.".into()),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
     }
 }
+
+// -----------------------------------------------------------------------------
+// Scenario driver (rmcp-friendly)
+// -----------------------------------------------------------------------------
 
 async fn run_scenario(
     url: String,
@@ -1269,29 +750,19 @@ async fn run_scenario(
     timeout: u64,
     proxies: Vec<String>,
 ) -> Result<Report, McpError> {
-    let components = Url::parse(&url.clone()).map_err(|e| {
-        McpError::internal_error(
-            "parse_url",
-            Some(json!({"err": e.to_string()})),
-        )
-    })?;
-
+    let components = Url::parse(&url).map_err(|e| mcp_internal("parse_url", e))?;
     let scheme = components.scheme();
-
     let host = components
         .host_str()
-        .ok_or(McpError::internal_error("extract_url_host", None))?;
-
+        .ok_or_else(|| mcp_internal("extract_url_host", "missing host"))?;
     let port = components
         .port_or_known_default()
-        .ok_or(McpError::internal_error("extract_url_port", None))?;
-
+        .ok_or_else(|| mcp_internal("extract_url_port", "missing port"))?;
     let origin = format!("{}://{}:{}", scheme, host, port);
 
     let headers = if !body.is_empty() {
         let mut h = HashMap::<String, String>::new();
-        let _ =
-            h.insert("content-type".to_owned(), "application/json".to_owned());
+        let _ = h.insert("content-type".to_owned(), "application/json".to_owned());
         Some(h)
     } else {
         None
@@ -1303,21 +774,17 @@ async fn run_scenario(
         disable_http_proxies = true;
         proxies_mapping.extend(proxies);
     } else {
-        // only apply this proxy when no other proxying was provided
-        // I chose here to only apply the faults to calls made to the app
-        // when no other specific proxies were set. When they are set, this
-        // is an explicit configuration I want to respect
         proxies_mapping.push(format!("{}={}", 3180, origin));
     }
 
     let s = Scenario {
-        title: format!("Evaluating runtime performance of {}", url.clone()),
+        title: format!("Evaluating runtime performance of {}", url),
         description: None,
         items: vec![ScenarioItem {
             call: ScenarioItemCall {
-                method: method,
-                url: url,
-                headers: headers,
+                method,
+                url,
+                headers,
                 body: (!body.is_empty()).then(|| body),
                 timeout: Some(timeout * 1000u64),
                 meta: None,
@@ -1326,26 +793,16 @@ async fn run_scenario(
                 upstreams: vec![],
                 faults: vec![fault],
                 strategy: Some(ScenarioItemCallStrategy::Load {
-                    duration: duration,
+                    duration,
                     clients: num_clients,
-                    rps: rps,
+                    rps,
                 }),
                 slo: Some(vec![
-                    ScenarioItemSLO {
-                        slo_type: "latency".to_string(),
-                        title: "99% @ 350ms".to_string(),
-                        objective: 99.0,
-                        threshold: 350.0,
-                    },
-                    ScenarioItemSLO {
-                        slo_type: "latency".to_string(),
-                        title: "95% @ 200ms".to_string(),
-                        objective: 95.0,
-                        threshold: 200.0,
-                    },
+                    ScenarioItemSLO { slo_type: "latency".into(), title: "99% @ 350ms".into(), objective: 99.0, threshold: 350.0 },
+                    ScenarioItemSLO { slo_type: "latency".into(), title: "95% @ 200ms".into(), objective: 95.0, threshold: 200.0 },
                 ]),
                 proxy: Some(ScenarioItemProxySettings {
-                    disable_http_proxies: disable_http_proxies,
+                    disable_http_proxies,
                     proxies: proxies_mapping,
                 }),
                 runs_on: None,
@@ -1355,16 +812,6 @@ async fn run_scenario(
         config: None,
     };
 
-    tracing::debug!("Applying scenario from MCP tool {:?}", s);
-
-    let results = run_scenario_first_item(s).await.map_err(|e| {
-        McpError::internal_error(
-            "run_scenario",
-            Some(json!({"err": e.to_string()})),
-        )
-    })?;
-
-    let report = report::builder::to_report(&results);
-
-    Ok(report)
+    let results = run_scenario_first_item(s).await.map_err(|e| mcp_internal("run_scenario", e))?;
+    Ok(report::builder::to_report(&results))
 }
