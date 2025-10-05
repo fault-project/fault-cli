@@ -74,7 +74,7 @@ jobs:
           cargo install bpf-linker --git https://github.com/aya-rs/bpf-linker.git
           cargo +nightly build --verbose --target ${{ matrix.target }} --features stealth
           cargo +nightly build \
-            --release \
+            --profile bpf \
             -p fault-ebpf-programs \
             --target=bpfel-unknown-none \
             -Z build-std=core

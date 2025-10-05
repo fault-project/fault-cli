@@ -322,7 +322,7 @@ jobs:
           cargo install bpf-linker --git https://github.com/aya-rs/bpf-linker.git
           cargo +nightly build --profile prod-fast --features stealth --target ${{ matrix.target }}
           cargo +nightly build \
-            --release \
+            --profile bpf \
             -p fault-ebpf-programs \
             --target=bpfel-unknown-none \
             -Z build-std=core
@@ -334,7 +334,7 @@ jobs:
           cargo install bpf-linker --git https://github.com/aya-rs/bpf-linker.git
           cargo +nightly zigbuild --profile prod-fast --features stealth --target ${{ matrix.target }}
           cargo +nightly build \
-            --release \
+            --profile bpf \
             -p fault-ebpf-programs \
             --target=bpfel-unknown-none \
             -Z build-std=core
