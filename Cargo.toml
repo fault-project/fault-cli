@@ -65,11 +65,8 @@ codegen-units = 1
 # eBPF crate: conservative tweaks; again, no panic/lto/strip here
 [profile.bpf]
 inherits = "release"
-lto = "off"            # <<< IMPORTANT: no LTO for BPF
-opt-level = "z"        # small is good for eBPF objects
-codegen-units = 1
-panic = "abort"
-debug = 0
-debug-assertions = false
-overflow-checks = false
-strip = "debuginfo"
+lto = "fat"        # same as your previous lto = true
+opt-level = 3
+codegen-units = 1  # redundant if inherited, but explicit is fine
+panic = "abort"    # inherited; keeping for clarity
+debug = 2          # keep DWARF; helpful for BTF/diagnostics
