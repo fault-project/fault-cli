@@ -34,9 +34,10 @@ pub struct EbpfConfig {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct EbpfProxyConfig {
-    pub target_proc_name: [u8; 16], /* Only intercept traffic from this
-                                     * process (if nonzero) */
-    pub proxy_pid: u32, // Do not intercept traffic from the proxy itself
+    pub target_proc_name: [u8; 16], /* Fallback: match by comm prefix */
+    pub target_tgid: u32,           /* Primary: match by TGID (0 = use comm
+                                     * fallback) */
+    pub proxy_pid: u32, // Exclude the proxy's own TGID
 
     // IPv4 proxy fields:
     pub proxy_ip4: u32,   // Proxy IPv4 in network byte order
@@ -175,8 +176,27 @@ pub fn install_and_run(
     let mut proxy_config_map: HashMap<_, u32, EbpfProxyConfig> =
         HashMap::try_from(ebpf_map).unwrap();
 
+    // Resolve process name to TGID if it's already running. When non-zero,
+    // the kernel matches all threads of that process by TGID (correct for
+    // multi-threaded runtimes like Bun/Node where the HTTP thread has a
+    // different comm than the process name).
+    let target_tgid = find_tgid_by_name(&ebpf_process).unwrap_or(0);
+    if target_tgid != 0 {
+        tracing::info!(
+            "Resolved '{}' to TGID {} for eBPF interception",
+            ebpf_process,
+            target_tgid
+        );
+    } else {
+        tracing::info!(
+            "'{}' not yet running; will match by process name when it starts",
+            ebpf_process
+        );
+    }
+
     let mut config = EbpfProxyConfig {
         target_proc_name: [0; 16],
+        target_tgid,
         proxy_pid: process::id(),
         proxy_ip4,
         proxy_port4,
@@ -277,6 +297,30 @@ fn find_ip_by_interface(
     iface_name: String,
 ) -> Option<&(String, IpAddr)> {
     interfaces.iter().find(|iface| iface.0 == iface_name)
+}
+
+/// Scan /proc to find the TGID of a running process whose comm matches
+/// `name`. Returns the first match found, or None if not running.
+fn find_tgid_by_name(name: &str) -> Option<u32> {
+    let dir = std::fs::read_dir("/proc").ok()?;
+    for entry in dir.flatten() {
+        let fname = entry.file_name();
+        let fname_str = fname.to_string_lossy();
+        // Only look at numeric entries (PIDs)
+        if !fname_str.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let mut comm_path = entry.path();
+        comm_path.push("comm");
+        if let Ok(comm) = std::fs::read_to_string(&comm_path) {
+            if comm.trim() == name {
+                if let Ok(tgid) = fname_str.parse::<u32>() {
+                    return Some(tgid);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn is_ipv6_link_local(addr: &std::net::Ipv6Addr) -> bool {

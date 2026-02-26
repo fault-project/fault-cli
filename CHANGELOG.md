@@ -2,6 +2,12 @@
 
 ## Added
 
+- eBPF stealth mode: match intercepted processes by TGID instead of thread comm, fixing
+  capture of multi-threaded runtimes (Bun/Node) where the HTTP thread has a different
+  comm than the process name (e.g. `HTTP Client` vs `opencode`)
+- eBPF stealth mode: skip interception of connections to `127.0.0.0/8` (loopback IPC)
+  to avoid forwarding intra-process connections that would reset
+
 - eBPF stealth mode: IPv6 interception support via a new `cg_connect6` cgroup program
   - Extended `ProxyConfig` and `Socket` BPF maps to carry IPv6 addresses
   - Added dual-listener proxy (separate ports for IPv4/IPv6 to avoid dual-stack bind conflicts)

@@ -29,8 +29,14 @@ use network_types::ip::IpProto;
 #[derive(Copy, Clone)]
 pub struct ProxyConfig {
     /// Target process name (null-terminated in 16 bytes).
+    /// Used as fallback when target_tgid is 0.
     pub target_proc_name: [u8; 16],
-    /// If a connection originates from this PID (the proxy), skip redirection.
+    /// If non-zero, only intercept connections from this TGID.
+    /// Takes precedence over target_proc_name. This correctly matches all
+    /// threads of a process, even those with a different thread comm.
+    pub target_tgid: u32,
+    /// If a connection originates from this TGID (the proxy), skip
+    /// redirection.
     pub proxy_pid: u32,
     /// IPv4 proxy address (network byte order)
     pub proxy_ip4: u32,
@@ -116,29 +122,39 @@ const SOL_IPV6: i32 = 41;
 // Helper Functions
 // ---------------------------------------------------------------------
 
-/// Returns `true` if the given `comm_arr` (up to its null terminator) starts
-/// with the bytes in `prefix`. Otherwise returns `false`.
-///
-/// This ignores any trailing zeros beyond the null terminator, but if the
-/// prefix is longer than the comm's actual length (as determined by null or the
-/// array size), it returns false.
+/// Returns `true` if this connection should be intercepted, based on:
+/// 1. If config.target_tgid is non-zero: match on TGID (upper 32 bits of
+///    bpf_get_current_pid_tgid). This correctly handles multi-threaded
+///    processes where individual threads have a different comm than the process
+///    (e.g. "HTTP Client" vs "opencode").
+/// 2. Otherwise: fall back to matching the current thread's comm against
+///    config.target_proc_name (prefix match, for single-threaded processes or
+///    when the target is not yet running at fault startup).
+#[inline(always)]
+fn should_intercept(config: &ProxyConfig, ctx: &SockAddrContext) -> bool {
+    if config.target_tgid != 0 {
+        let tgid = (unsafe { aya_ebpf::helpers::bpf_get_current_pid_tgid() }
+            >> 32) as u32;
+        return tgid == config.target_tgid;
+    }
+
+    // Fallback: match on the current thread's comm (prefix match).
+    let comm = match ctx.command() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    starts_with_comm(&comm, &config.target_proc_name)
+}
+
 #[inline(always)]
 fn starts_with_comm(comm_arr: &[u8; 16], prefix_arr: &[u8; 16]) -> bool {
-    // 1) Find end of comm (first null or full length)
     let comm_end =
         comm_arr.iter().position(|&b| b == 0).unwrap_or(comm_arr.len());
-
-    // 2) Find end of prefix (first null or full length)
     let prefix_end =
         prefix_arr.iter().position(|&b| b == 0).unwrap_or(prefix_arr.len());
-
-    // 3) If the prefix (non-null portion) is longer than the comm, can't match
     if prefix_end > comm_end {
         return false;
     }
-
-    // 4) Check if comm's first `prefix_end` bytes match the prefix's first
-    //    `prefix_end` bytes
     comm_arr[0..prefix_end] == prefix_arr[0..prefix_end]
 }
 
@@ -164,22 +180,26 @@ pub fn cg_connect4(ctx: SockAddrContext) -> i32 {
         None => return TC_ACT_RECLASSIFY,
     };
 
-    let comm = match ctx.command() {
-        Ok(c) => c,
-        Err(_) => return TC_ACT_RECLASSIFY,
-    };
-
-    if !starts_with_comm(&comm, &config.target_proc_name) {
-        return 1;
-    }
-
-    let pid = ctx.pid() as u32;
-    if pid == config.proxy_pid {
+    // Exclude the proxy's own connections first (cheap check).
+    let tgid =
+        (unsafe { aya_ebpf::helpers::bpf_get_current_pid_tgid() } >> 32) as u32;
+    if tgid == config.proxy_pid {
         return TC_ACT_RECLASSIFY;
     }
 
-    // Capture the original destination (from the connect syscall).
+    if !should_intercept(config, &ctx) {
+        return 1;
+    }
+
     let orig_ip = sock.user_ip4;
+
+    // Skip connections to 127.0.0.0/8 — loopback IPC that should never be
+    // proxied. Note: user_ip4 is NBO; on LE 127.0.0.1 = 0x0100007f, so the
+    // first byte (low byte of the u32) is 0x7f.
+    if orig_ip.to_ne_bytes()[0] == 0x7f {
+        return TC_ACT_RECLASSIFY;
+    }
+
     let orig_port = sock.user_port as u16;
 
     // Obtain a unique socket cookie.
@@ -225,24 +245,17 @@ pub fn cg_connect6(ctx: SockAddrContext) -> i32 {
         None => return TC_ACT_RECLASSIFY,
     };
 
-    let comm = match ctx.command() {
-        Ok(c) => c,
-        Err(_) => return TC_ACT_RECLASSIFY,
-    };
-
-    if !starts_with_comm(&comm, &config.target_proc_name) {
-        return 1;
-    }
-
-    let pid = ctx.pid() as u32;
-    if pid == config.proxy_pid {
+    // Exclude the proxy's own connections first (cheap check).
+    let tgid =
+        (unsafe { aya_ebpf::helpers::bpf_get_current_pid_tgid() } >> 32) as u32;
+    if tgid == config.proxy_pid {
         return TC_ACT_RECLASSIFY;
     }
 
-    // Capture the original IPv6 destination.
-    // bpf_sock_addr.user_ip6 is [u32; 4] in HOST byte order (per kernel docs).
-    // We store as [u8; 16] using native byte order so the value round-trips
-    // correctly when we write it back into sockaddr_in6 on the getsockopt side.
+    if !should_intercept(config, &ctx) {
+        return 1;
+    }
+
     let orig_ip6_u32 = sock.user_ip6;
     let orig_port = sock.user_port as u16;
 
