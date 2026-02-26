@@ -7,6 +7,9 @@
   comm than the process name (e.g. `HTTP Client` vs `opencode`)
 - eBPF stealth mode: skip interception of connections to `127.0.0.0/8` (loopback IPC)
   to avoid forwarding intra-process connections that would reset
+- eBPF stealth mode: treat `ConnectionReset` from client as a normal teardown (not an
+  error) — Happy Eyeballs causes the losing IP-family connection to be RST'd by the
+  client once the winning family completes
 
 - eBPF stealth mode: IPv6 interception support via a new `cg_connect6` cgroup program
   - Extended `ProxyConfig` and `Socket` BPF maps to carry IPv6 addresses

@@ -154,6 +154,16 @@ fn handle_accept(
                             Err(e) if is_unexpected_eof(&e) => {
                                 tracing::debug!("EOF reached on stream: {}", e);
                             }
+                            Err(e) if is_connection_reset(&e) => {
+                                // Normal for Happy Eyeballs: the client
+                                // abandons the slower IP-family connection
+                                // once the other family wins the race.
+                                tracing::debug!(
+                                    "Connection reset by peer {}: {}",
+                                    peer_addr,
+                                    e
+                                );
+                            }
                             Err(e) => {
                                 tracing::error!(
                                     "Error handling eBPF stream from {}: {:?}",
@@ -254,6 +264,15 @@ async fn get_original_dst(fd: i32) -> Result<Option<SocketAddr>, ProxyError> {
 fn is_unexpected_eof(err: &ProxyError) -> bool {
     match err {
         ProxyError::IoError(ioerr) => ioerr.kind() == ErrorKind::UnexpectedEof,
+        _ => false,
+    }
+}
+
+fn is_connection_reset(err: &ProxyError) -> bool {
+    match err {
+        ProxyError::IoError(ioerr) => {
+            ioerr.kind() == ErrorKind::ConnectionReset
+        }
         _ => false,
     }
 }
