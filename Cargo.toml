@@ -65,7 +65,7 @@ codegen-units = 1
 # eBPF crate: conservative tweaks; again, no panic/lto/strip here
 [profile.bpf]
 inherits = "release"
-lto = "fat"        # same as your previous lto = true
+lto = false         # fat LTO causes memcpy symbol conflict on BPF
 opt-level = 3
 codegen-units = 1  # redundant if inherited, but explicit is fine
 panic = "abort"    # inherited; keeping for clarity

@@ -16,8 +16,8 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]
 
 [dependencies]
-aya-ebpf = "0.1.1"
-aya-log-ebpf = { git = "https://github.com/aya-rs/aya.git" }
+aya-ebpf = { git = "https://github.com/aya-rs/aya.git", rev = "c42157f0" }
+aya-log-ebpf = { git = "https://github.com/aya-rs/aya.git", rev = "c42157f0" }
 network-types = "0.1.0"
 
 [build-dependencies]

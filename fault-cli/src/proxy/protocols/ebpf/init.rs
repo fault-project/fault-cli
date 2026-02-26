@@ -15,14 +15,16 @@ pub async fn initialize_ebpf_proxy(
     shutdown_rx: kanal::AsyncReceiver<()>,
     task_manager: Arc<TaskManager>,
 ) -> Result<task::JoinHandle<Result<(), ProxyError>>> {
-    let proxy_address = ebpf_proxy_config.proxy_address();
+    let proxy_address_v4 = ebpf_proxy_config.proxy_address_v4();
+    let proxy_address_v6 = ebpf_proxy_config.proxy_address_v6();
 
     // Create a oneshot channel for readiness signaling
     let (readiness_tx, readiness_rx) = oneshot::channel::<()>();
 
     let handle = tokio::spawn(async move {
         ebpf::run_ebpf_proxy(
-            proxy_address.clone(),
+            proxy_address_v4.clone(),
+            proxy_address_v6.clone(),
             state.clone(),
             shutdown_rx,
             readiness_tx,
@@ -40,8 +42,9 @@ pub async fn initialize_ebpf_proxy(
     });
 
     tracing::info!(
-        "eBPF Proxy server is listening on {}",
-        ebpf_proxy_config.proxy_address()
+        "eBPF Proxy server is listening on {} and {}",
+        ebpf_proxy_config.proxy_address_v4(),
+        ebpf_proxy_config.proxy_address_v6(),
     );
 
     Ok(handle)

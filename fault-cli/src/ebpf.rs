@@ -39,12 +39,12 @@ pub struct EbpfProxyConfig {
     pub proxy_pid: u32, // Do not intercept traffic from the proxy itself
 
     // IPv4 proxy fields:
-    pub proxy_ip4: u32, // Proxy IP in network byte order
-    pub proxy_port4: u16, /* Proxy port (network byte order) */
+    pub proxy_ip4: u32,   // Proxy IPv4 in network byte order
+    pub proxy_port4: u16, // Proxy IPv4 port (network byte order)
 
-                        /* IPv6 proxy fields:
-                         *pub proxy_ip6: [u8; 16],
-                         *pub proxy_port6: u16, */
+    // IPv6 proxy fields:
+    pub proxy_ip6: [u8; 16], // Proxy IPv6 address (network byte order)
+    pub proxy_port6: u16,    // Proxy IPv6 port (network byte order)
 }
 
 unsafe impl Pod for EbpfConfig {}
@@ -64,8 +64,8 @@ pub fn get_ebpf_proxy(
         return Ok(None);
     }
 
-    let iface_name;
-    let iface_ip: Ipv4Addr;
+    let iface_name: String;
+    let iface_ip: IpAddr;
 
     if let Some(iface) = ebpf_proxy_iface {
         let proxy_iface = match find_ip_by_interface(&interfaces, iface) {
@@ -75,11 +75,11 @@ pub fn get_ebpf_proxy(
         iface_ip = proxy_iface.1;
         iface_name = proxy_iface.0.clone();
     } else if let Some(ebpf_ip) = ebpf_proxy_ip {
-        let proxy_iface =
-            match find_interface_by_ip(&interfaces, ebpf_ip.parse()?) {
-                Some(it) => it,
-                None => return Ok(None),
-            };
+        let parsed: IpAddr = ebpf_ip.parse()?;
+        let proxy_iface = match find_interface_by_ip(&interfaces, parsed) {
+            Some(it) => it,
+            None => return Ok(None),
+        };
         iface_ip = proxy_iface.1;
         iface_name = proxy_iface.0.clone();
     } else {
@@ -87,14 +87,16 @@ pub fn get_ebpf_proxy(
 
         if Ipv4Addr::from(proxy_ip4) == Ipv4Addr::new(0, 0, 0, 0) {
             let proxy_iface = find_non_loopback_interface(&interfaces).unwrap();
-            iface_ip = proxy_iface.1; // Ipv4Addr::new(0, 0, 0, 0);
+            iface_ip = proxy_iface.1;
             iface_name = proxy_iface.0.clone();
         } else {
-            let proxy_iface =
-                match find_interface_by_ip(&interfaces, proxy_ip4.into()) {
-                    Some(it) => it,
-                    None => return Ok(None),
-                };
+            let proxy_iface = match find_interface_by_ip(
+                &interfaces,
+                IpAddr::V4(proxy_ip4.into()),
+            ) {
+                Some(it) => it,
+                None => return Ok(None),
+            };
             iface_ip = proxy_iface.1;
             iface_name = proxy_iface.0.clone();
         }
@@ -104,10 +106,37 @@ pub fn get_ebpf_proxy(
         Some(p) => p,
         None => rand::rng().random_range(1024..=65535),
     };
+    // Use a separate port for IPv6 to avoid dual-stack bind conflicts:
+    // binding [::]:port when 127.0.0.1:port already exists fails on systems
+    // with IPV6_V6ONLY=0 because [::] also claims 0.0.0.0:port.
+    let port6: u16 = rand::rng().random_range(1024..=65535);
 
-    tracing::debug!("eBPF proxy detected address {}:{}", iface_ip, port);
+    tracing::debug!(
+        "eBPF proxy detected address {}:{} (IPv6 port: {})",
+        iface_ip,
+        port,
+        port6
+    );
 
-    Ok(Some(EbpfProxyAddrConfig { ip: iface_ip, port, ifname: iface_name }))
+    // Find the machine's global (non-loopback, non-link-local) IPv6 address
+    // to use as the BPF redirect target. The kernel rejects connect6 rewrites
+    // to loopback (::1) for non-loopback sockets.
+    let ip6_redirect = interfaces.iter().find_map(|(_, addr)| {
+        if let IpAddr::V6(v6) = addr {
+            if !v6.is_loopback() && !is_ipv6_link_local(v6) {
+                return Some(*v6);
+            }
+        }
+        None
+    });
+
+    Ok(Some(EbpfProxyAddrConfig {
+        ip: iface_ip,
+        ip6_redirect,
+        port,
+        port6,
+        ifname: iface_name,
+    }))
 }
 
 pub fn install_and_run(
@@ -115,14 +144,29 @@ pub fn install_and_run(
     ebpf_proxy_config: &EbpfProxyAddrConfig,
     ebpf_process: String,
 ) -> anyhow::Result<()> {
-    let proxy_ip4 = ebpf_proxy_config.ip;
     let iface = ebpf_proxy_config.ifname.as_str();
 
-    tracing::debug!("Using interface {} {}", proxy_ip4, iface);
+    tracing::debug!(
+        "Using interface {} {} (IPv6 redirect target: {:?})",
+        ebpf_proxy_config.ip,
+        iface,
+        ebpf_proxy_config.ip6_redirect
+    );
 
     for (name, ..) in ebpf.maps() {
         tracing::info!("found map `{}`", name,);
     }
+
+    let proxy_ip4: u32 = std::net::Ipv4Addr::LOCALHOST.into();
+    let proxy_port4 = u16::to_be(ebpf_proxy_config.port);
+    // Use the machine's global IPv6 address as the redirect target.
+    // The kernel rejects connect6 rewrites to ::1 (loopback) for sockets
+    // that aren't already bound to a loopback source.
+    let proxy_ip6 = ebpf_proxy_config
+        .ip6_redirect
+        .map(|v6| v6.octets())
+        .unwrap_or([0u8; 16]);
+    let proxy_port6 = u16::to_be(ebpf_proxy_config.port6);
 
     // Initialize the shared map for proxy configuration.
     let ebpf_map: &mut aya::maps::Map = ebpf
@@ -134,10 +178,10 @@ pub fn install_and_run(
     let mut config = EbpfProxyConfig {
         target_proc_name: [0; 16],
         proxy_pid: process::id(),
-        proxy_ip4: ebpf_proxy_config.ip.into(),
-        proxy_port4: u16::to_be(ebpf_proxy_config.port),
-        //proxy_ip6: proxy_ip6,
-        //proxy_port6: u16::to_be(proxy_nic_config.proxy_port),
+        proxy_ip4,
+        proxy_port4,
+        proxy_ip6,
+        proxy_port6,
     };
 
     let proc_name = ebpf_process.as_bytes();
@@ -149,15 +193,14 @@ pub fn install_and_run(
 
     tracing::info!(
         "Shared map PROXY_CONFIG initialized {}:{} [PID: {}]",
-        u32::from_be(config.proxy_ip4),
-        u16::from_be(config.proxy_port4),
+        ebpf_proxy_config.ip,
+        ebpf_proxy_config.port,
         config.proxy_pid
     );
 
     let _ = tc::qdisc_add_clsact(iface);
 
-    // Attach the cgroup_sock program to a cgroup.
-    // This program will tag connections for the target process.
+    // Attach the cgroup_sock programs to the cgroup.
     let cgroup_path = "/sys/fs/cgroup/"; // Adjust as needed.
     let cgroup = std::fs::File::open(cgroup_path).unwrap();
 
@@ -166,16 +209,24 @@ pub fn install_and_run(
     let cgroup_prog_v4: &mut CgroupSockAddr =
         ebpf.program_mut("cg_connect4").unwrap().try_into()?;
     match cgroup_prog_v4.load() {
-        Ok(_) => tracing::debug!("cg_connect4 program attached"),
+        Ok(_) => tracing::debug!("cg_connect4 program loaded"),
         Err(e) => tracing::error!("cg_connect4 program failed to load {:?}", e),
     };
     cgroup_prog_v4.attach(&cgroup, CgroupAttachMode::Single).unwrap();
+
+    let cgroup_prog_v6: &mut CgroupSockAddr =
+        ebpf.program_mut("cg_connect6").unwrap().try_into()?;
+    match cgroup_prog_v6.load() {
+        Ok(_) => tracing::debug!("cg_connect6 program loaded"),
+        Err(e) => tracing::error!("cg_connect6 program failed to load {:?}", e),
+    };
+    cgroup_prog_v6.attach(&cgroup, CgroupAttachMode::Single).unwrap();
 
     // Attach the sock_ops program.
     let sock_ops: &mut SockOps =
         ebpf.program_mut("cg_sock_ops").unwrap().try_into()?;
     match sock_ops.load() {
-        Ok(_) => tracing::debug!("cg_sock_ops program attached"),
+        Ok(_) => tracing::debug!("cg_sock_ops program loaded"),
         Err(e) => tracing::error!("cg_sock_ops program failed to load {:?}", e),
     };
     sock_ops.attach(&cgroup, CgroupAttachMode::Single).unwrap();
@@ -183,7 +234,7 @@ pub fn install_and_run(
     let opt_prog: &mut CgroupSockopt =
         ebpf.program_mut("cg_sock_opt").unwrap().try_into()?;
     match opt_prog.load() {
-        Ok(_) => tracing::debug!("cg_sock_opt program attached"),
+        Ok(_) => tracing::debug!("cg_sock_opt program loaded"),
         Err(e) => tracing::error!("cg_sock_opt program failed to load {:?}", e),
     };
     opt_prog.attach(&cgroup, CgroupAttachMode::Single).unwrap();
@@ -197,40 +248,47 @@ pub fn install_and_run(
 // -------------------- Private functions -----------------------------------
 //
 
-// Function to find interface by IP.
+// Function to find interface by IP (supports both IPv4 and IPv6).
 fn find_interface_by_ip(
-    interfaces: &[(String, Ipv4Addr)],
-    ip: Ipv4Addr,
-) -> Option<&(String, Ipv4Addr)> {
+    interfaces: &[(String, IpAddr)],
+    ip: IpAddr,
+) -> Option<&(String, IpAddr)> {
     interfaces.iter().find(|iface| iface.1 == ip)
 }
 
-// Function to find non loopback interface
+// Function to find a non-loopback interface (prefer IPv4, fall back to IPv6).
 fn find_non_loopback_interface(
-    interfaces: &[(String, Ipv4Addr)],
-) -> Option<&(String, Ipv4Addr)> {
-    interfaces.iter().find(|iface| !iface.1.is_loopback())
+    interfaces: &[(String, IpAddr)],
+) -> Option<&(String, IpAddr)> {
+    // Prefer a non-loopback IPv4 first.
+    interfaces
+        .iter()
+        .find(|iface| matches!(iface.1, IpAddr::V4(v4) if !v4.is_loopback()))
+        .or_else(|| {
+            interfaces.iter().find(
+                |iface| matches!(iface.1, IpAddr::V6(v6) if !v6.is_loopback()),
+            )
+        })
 }
 
-// Function to find the IP attached to an IP
+// Function to find the IP attached to a named interface.
 fn find_ip_by_interface(
-    interfaces: &[(String, Ipv4Addr)],
+    interfaces: &[(String, IpAddr)],
     iface_name: String,
-) -> Option<&(String, Ipv4Addr)> {
+) -> Option<&(String, IpAddr)> {
     interfaces.iter().find(|iface| iface.0 == iface_name)
 }
 
-fn get_all_interfaces() -> anyhow::Result<Vec<(String, Ipv4Addr)>> {
+fn is_ipv6_link_local(addr: &std::net::Ipv6Addr) -> bool {
+    // fe80::/10
+    let octets = addr.octets();
+    octets[0] == 0xfe && (octets[1] & 0xc0) == 0x80
+}
+
+fn get_all_interfaces() -> anyhow::Result<Vec<(String, IpAddr)>> {
     let interfaces: Vec<(String, IpAddr)> = list_afinet_netifas()
         .map_err(|e| tracing::error!("Failed to get network interfaces: {}", e))
         .unwrap();
-
-    let interfaces: Vec<(String, Ipv4Addr)> = interfaces
-        .into_iter()
-        .filter_map(|(name, addr)| {
-            if let IpAddr::V4(ipv4) = addr { Some((name, ipv4)) } else { None }
-        })
-        .collect();
 
     Ok(interfaces)
 }

@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
+use std::net::IpAddr;
 use std::net::Ipv4Addr;
+use std::net::Ipv6Addr;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -117,14 +119,33 @@ impl fmt::Display for ProxyAddrConfig {
 }
 
 pub struct EbpfProxyAddrConfig {
-    pub ip: Ipv4Addr,
+    pub ip: IpAddr,
+    /// The actual global IPv6 address of this machine, used as the BPF
+    /// redirect target. The kernel rejects rewrites to loopback (::1) for
+    /// non-loopback sockets, so we must use a routable address.
+    pub ip6_redirect: Option<Ipv6Addr>,
+    /// Port for IPv4 interception (127.0.0.1).
     pub port: u16,
+    /// Separate port for IPv6 interception, to avoid dual-stack bind
+    /// conflicts.
+    pub port6: u16,
     pub ifname: String,
 }
 
 impl EbpfProxyAddrConfig {
+    /// IPv4 proxy listen address.
+    pub fn proxy_address_v4(&self) -> String {
+        format!("127.0.0.1:{}", self.port)
+    }
+
+    /// IPv6 proxy listen address — wildcard, separate port.
+    pub fn proxy_address_v6(&self) -> String {
+        format!("[::]:{}", self.port6)
+    }
+
+    /// Primary address (kept for logging / display purposes).
     pub fn proxy_address(&self) -> String {
-        format!("{}:{}", self.ip, self.port)
+        self.proxy_address_v4()
     }
 }
 

@@ -9,7 +9,6 @@ use aya_ebpf::bindings::BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB;
 use aya_ebpf::bindings::TC_ACT_RECLASSIFY;
 use aya_ebpf::bindings::bpf_sock_addr;
 use aya_ebpf::bindings::bpf_sockopt;
-use aya_ebpf::bindings::{self};
 use aya_ebpf::macros::cgroup_sock_addr;
 use aya_ebpf::macros::cgroup_sockopt;
 use aya_ebpf::macros::map;
@@ -18,14 +17,13 @@ use aya_ebpf::maps::HashMap;
 use aya_ebpf::programs::SockAddrContext;
 use aya_ebpf::programs::SockOpsContext;
 use aya_ebpf::programs::SockoptContext;
-use aya_log_ebpf::debug;
 use network_types::ip::IpProto;
 
 // ---------------------------------------------------------------------
 // Data Structures and Maps
 // ---------------------------------------------------------------------
 
-/// Proxy configuration: Only IPv4 is supported.
+/// Proxy configuration supporting both IPv4 and IPv6.
 /// All IP addresses and ports are stored in network byte order.
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -38,18 +36,27 @@ pub struct ProxyConfig {
     pub proxy_ip4: u32,
     /// IPv4 proxy port (network byte order)
     pub proxy_port4: u16,
+    /// IPv6 proxy address (network byte order, 16 bytes)
+    pub proxy_ip6: [u8; 16],
+    /// IPv6 proxy port (network byte order)
+    pub proxy_port6: u16,
 }
 
 #[map(name = "PROXY_CONFIG")]
 static mut PROXY_CONFIG: HashMap<u32, ProxyConfig> =
     HashMap::<u32, ProxyConfig>::with_max_entries(1, 0);
 
-/// Structure to hold the original destination (for IPv4).
+/// Structure to hold the original destination for a connection.
+/// Supports both IPv4 (dst_addr populated) and IPv6 (dst_addr6 populated).
+/// The `is_v6` field distinguishes which is in use.
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct Socket {
-    pub dst_addr: u32, // original destination IP (network byte order)
+    pub dst_addr: u32, // IPv4 original destination IP (network byte order)
+    pub dst_addr6: [u8; 16], /* IPv6 original destination IP (network byte
+                        * order) */
     pub dst_port: u16, // original destination port (network byte order)
+    pub is_v6: u8,     // 0 = IPv4, 1 = IPv6
 }
 
 /// Map to store the original destination for each connection,
@@ -64,9 +71,7 @@ static mut MAP_SOCKS: HashMap<u64, Socket> =
 static mut MAP_PORTS: HashMap<u16, u64> =
     HashMap::<u16, u64>::with_max_entries(20000, 0);
 
-/// Structure representing the source socker information once the connection
-/// has been established
-/// aya doesn't seem to provide these structures
+/// IPv4 socket address structure (aya doesn't expose this directly).
 #[repr(C)]
 pub struct InAddr {
     pub s_addr: u32,
@@ -82,6 +87,31 @@ pub struct SockaddrIn {
 
 const SOCKADDR_IN_SIZE: usize = 16;
 
+/// IPv6 socket address structure.
+#[repr(C)]
+pub struct In6Addr {
+    pub in6_u: [u8; 16],
+}
+
+#[repr(C)]
+pub struct SockaddrIn6 {
+    pub sin6_family: u16,
+    pub sin6_port: u16,
+    pub sin6_flowinfo: u32,
+    pub sin6_addr: In6Addr,
+    pub sin6_scope_id: u32,
+}
+
+const SOCKADDR_IN6_SIZE: usize = 28;
+
+// AF_INET = 2, AF_INET6 = 10
+const AF_INET: u32 = 2;
+const AF_INET6: u32 = 10;
+
+// getsockopt levels
+const SOL_IP: i32 = 0;
+const SOL_IPV6: i32 = 41;
+
 // ---------------------------------------------------------------------
 // Helper Functions
 // ---------------------------------------------------------------------
@@ -90,7 +120,7 @@ const SOCKADDR_IN_SIZE: usize = 16;
 /// with the bytes in `prefix`. Otherwise returns `false`.
 ///
 /// This ignores any trailing zeros beyond the null terminator, but if the
-/// prefix is longer than the comm’s actual length (as determined by null or the
+/// prefix is longer than the comm's actual length (as determined by null or the
 /// array size), it returns false.
 #[inline(always)]
 fn starts_with_comm(comm_arr: &[u8; 16], prefix_arr: &[u8; 16]) -> bool {
@@ -126,7 +156,7 @@ fn starts_with_comm(comm_arr: &[u8; 16], prefix_arr: &[u8; 16]) -> bool {
 pub fn cg_connect4(ctx: SockAddrContext) -> i32 {
     let sock = unsafe { &*ctx.sock_addr };
     // Process only IPv4 TCP connections.
-    if sock.user_family != 2 || sock.protocol != IpProto::Tcp as u32 {
+    if sock.user_family != AF_INET || sock.protocol != IpProto::Tcp as u32 {
         return TC_ACT_RECLASSIFY;
     }
     let config = match unsafe { PROXY_CONFIG.get(&0) } {
@@ -153,12 +183,16 @@ pub fn cg_connect4(ctx: SockAddrContext) -> i32 {
     let orig_port = sock.user_port as u16;
 
     // Obtain a unique socket cookie.
-    // Note: bpf_get_socket_cookie is provided by Aya as a helper.
     let cookie =
         unsafe { aya_ebpf::helpers::bpf_get_socket_cookie(ctx.as_ptr()) };
 
     // Store the original destination in MAP_SOCKS, keyed by the cookie.
-    let orig = Socket { dst_addr: orig_ip, dst_port: orig_port };
+    let orig = Socket {
+        dst_addr: orig_ip,
+        dst_addr6: [0u8; 16],
+        dst_port: orig_port,
+        is_v6: 0,
+    };
     unsafe {
         let _ = MAP_SOCKS.insert(&cookie, &orig, 0);
     }
@@ -169,6 +203,87 @@ pub fn cg_connect4(ctx: SockAddrContext) -> i32 {
     unsafe {
         (*sock_mut).user_ip4 = config.proxy_ip4.to_be();
         (*sock_mut).user_port = u32::from(config.proxy_port4);
+    }
+
+    TC_ACT_RECLASSIFY
+}
+
+// ---------------------------------------------------------------------
+// cgroup_sock_addr Program for IPv6 (Redirect on connect)
+// ---------------------------------------------------------------------
+
+/// This program runs when a process calls connect(2) on an IPv6 socket.
+/// The connect6 hook is only invoked for AF_INET6 sockets, so no family check
+/// is needed. It filters by process name, stores the original destination, and
+/// rewrites the socket's destination to the IPv6 proxy address/port.
+#[cgroup_sock_addr(connect6)]
+pub fn cg_connect6(ctx: SockAddrContext) -> i32 {
+    let sock = unsafe { &*ctx.sock_addr };
+
+    let config = match unsafe { PROXY_CONFIG.get(&0) } {
+        Some(c) => c,
+        None => return TC_ACT_RECLASSIFY,
+    };
+
+    let comm = match ctx.command() {
+        Ok(c) => c,
+        Err(_) => return TC_ACT_RECLASSIFY,
+    };
+
+    if !starts_with_comm(&comm, &config.target_proc_name) {
+        return 1;
+    }
+
+    let pid = ctx.pid() as u32;
+    if pid == config.proxy_pid {
+        return TC_ACT_RECLASSIFY;
+    }
+
+    // Capture the original IPv6 destination.
+    // bpf_sock_addr.user_ip6 is [u32; 4] in HOST byte order (per kernel docs).
+    // We store as [u8; 16] using native byte order so the value round-trips
+    // correctly when we write it back into sockaddr_in6 on the getsockopt side.
+    let orig_ip6_u32 = sock.user_ip6;
+    let orig_port = sock.user_port as u16;
+
+    // user_ip6 is [u32; 4] in network byte order (big-endian) in memory.
+    // to_ne_bytes() copies the memory bytes as-is, preserving the NBO layout.
+    let mut orig_ip6 = [0u8; 16];
+    orig_ip6[0..4].copy_from_slice(&orig_ip6_u32[0].to_ne_bytes());
+    orig_ip6[4..8].copy_from_slice(&orig_ip6_u32[1].to_ne_bytes());
+    orig_ip6[8..12].copy_from_slice(&orig_ip6_u32[2].to_ne_bytes());
+    orig_ip6[12..16].copy_from_slice(&orig_ip6_u32[3].to_ne_bytes());
+
+    // Obtain a unique socket cookie.
+    let cookie =
+        unsafe { aya_ebpf::helpers::bpf_get_socket_cookie(ctx.as_ptr()) };
+
+    // Store the original destination in MAP_SOCKS, keyed by the cookie.
+    let orig = Socket {
+        dst_addr: 0,
+        dst_addr6: orig_ip6,
+        dst_port: orig_port,
+        is_v6: 1,
+    };
+    unsafe {
+        let _ = MAP_SOCKS.insert(&cookie, &orig, 0);
+    }
+
+    // Rewrite the socket's destination to the IPv6 proxy address/port.
+    // user_ip6 is [u32; 4] stored in network byte order (big-endian) in
+    // memory. proxy_ip6 is already [u8; 16] in network byte order (from
+    // Ipv6Addr::octets()). We use from_ne_bytes so the 4 bytes are placed
+    // into memory exactly as they appear in proxy_ip6 without any byte swap.
+    let sock_mut = ctx.sock_addr as *mut bpf_sock_addr;
+    unsafe {
+        let p = config.proxy_ip6;
+        (*sock_mut).user_ip6[0] = u32::from_ne_bytes([p[0], p[1], p[2], p[3]]);
+        (*sock_mut).user_ip6[1] = u32::from_ne_bytes([p[4], p[5], p[6], p[7]]);
+        (*sock_mut).user_ip6[2] =
+            u32::from_ne_bytes([p[8], p[9], p[10], p[11]]);
+        (*sock_mut).user_ip6[3] =
+            u32::from_ne_bytes([p[12], p[13], p[14], p[15]]);
+        (*sock_mut).user_port = u32::from(config.proxy_port6);
     }
 
     TC_ACT_RECLASSIFY
@@ -200,32 +315,45 @@ pub fn cg_sock_ops(ctx: SockOpsContext) -> u32 {
 }
 
 // ---------------------------------------------------------------------
-// cgroup_sockopt Program: Respond to SO_ORIGINAL_DST
+// cgroup_sockopt Program: Respond to SO_ORIGINAL_DST / IP6T_SO_ORIGINAL_DST
 // ---------------------------------------------------------------------
 
-/// This program is triggered when the proxy calls getsockopt(SO_ORIGINAL_DST).
-/// It uses the client's source port (from the socket) to retrieve the
-/// corresponding cookie from MAP_PORTS, then uses that cookie to get the
-/// original destination from MAP_SOCKS. Finally, it writes the original
-/// destination (a sockaddr_in) into the optval.
+/// This program is triggered when the proxy calls getsockopt(SO_ORIGINAL_DST)
+/// or getsockopt(IP6T_SO_ORIGINAL_DST). It uses the client's source port (from
+/// the socket) to retrieve the corresponding cookie from MAP_PORTS, then uses
+/// that cookie to get the original destination from MAP_SOCKS. Finally, it
+/// writes the original destination (sockaddr_in or sockaddr_in6) into the
+/// optval.
 #[cgroup_sockopt(getsockopt)]
 pub fn cg_sock_opt(ctx: SockoptContext) -> i32 {
     let sockopt = unsafe { &mut *(ctx.sockopt as *mut bpf_sockopt) };
 
-    // this should be SO_ORIGINAL_DST
+    // Only handle SO_ORIGINAL_DST (optname 80), on the correct level per
+    // family.
     if sockopt.optname != 80 {
         return TC_ACT_RECLASSIFY;
     }
 
     let sk = unsafe { &*sockopt.__bindgen_anon_1.sk };
 
-    // must be an IP family
-    if sk.family != 2 {
+    // must be TCP
+    if sk.protocol != 6 {
         return TC_ACT_RECLASSIFY;
     }
 
-    // must be TCP
-    if sk.protocol != 6 {
+    let family = sk.family;
+
+    // Only handle the level that matches the socket family.
+    // SOL_IP (0) for AF_INET, SOL_IPV6 (41) for AF_INET6.
+    // This prevents trying to write a 28-byte sockaddr_in6 into the
+    // 16-byte buffer the caller allocated for the SOL_IP probe.
+    if family == AF_INET && sockopt.level != SOL_IP {
+        return TC_ACT_RECLASSIFY;
+    }
+    if family == AF_INET6 && sockopt.level != SOL_IPV6 {
+        return TC_ACT_RECLASSIFY;
+    }
+    if family != AF_INET && family != AF_INET6 {
         return TC_ACT_RECLASSIFY;
     }
 
@@ -239,33 +367,51 @@ pub fn cg_sock_opt(ctx: SockoptContext) -> i32 {
     };
 
     // Look up the original destination using the cookie.
-    let orig = match unsafe { MAP_SOCKS.get(&cookie) } {
+    let orig = match unsafe { MAP_SOCKS.get(cookie) } {
         Some(o) => o,
         None => return TC_ACT_RECLASSIFY,
     };
 
-    // optval is assumed to point to a SockaddrIn.
     let optval = unsafe { sockopt.__bindgen_anon_2.optval };
     let optval_end = unsafe { sockopt.__bindgen_anon_3.optval_end };
-    let sa: *mut SockaddrIn = optval as *mut SockaddrIn;
-    if sa.is_null() {
-        return TC_ACT_RECLASSIFY;
+
+    if orig.is_v6 == 0 {
+        // IPv4: write a sockaddr_in
+        let sa: *mut SockaddrIn = optval as *mut SockaddrIn;
+        if sa.is_null() {
+            return TC_ACT_RECLASSIFY;
+        }
+        if (optval as usize + SOCKADDR_IN_SIZE) > optval_end as usize {
+            return TC_ACT_RECLASSIFY;
+        }
+
+        sockopt.optlen = mem::size_of::<SockaddrIn>() as i32;
+        unsafe {
+            (*sa).sin_family = AF_INET as u16;
+            (*sa).sin_addr.s_addr = orig.dst_addr;
+            (*sa).sin_port = orig.dst_port;
+            (*sa).sin_zero = [0u8; 8];
+        }
+    } else {
+        // IPv6: write a sockaddr_in6
+        let sa6: *mut SockaddrIn6 = optval as *mut SockaddrIn6;
+        if sa6.is_null() {
+            return TC_ACT_RECLASSIFY;
+        }
+        if (optval as usize + SOCKADDR_IN6_SIZE) > optval_end as usize {
+            return TC_ACT_RECLASSIFY;
+        }
+
+        sockopt.optlen = mem::size_of::<SockaddrIn6>() as i32;
+        unsafe {
+            (*sa6).sin6_family = AF_INET6 as u16;
+            (*sa6).sin6_port = orig.dst_port;
+            (*sa6).sin6_flowinfo = 0;
+            (*sa6).sin6_addr.in6_u = orig.dst_addr6;
+            (*sa6).sin6_scope_id = 0;
+        }
     }
 
-    if (optval as usize + SOCKADDR_IN_SIZE) > optval_end as usize {
-        return TC_ACT_RECLASSIFY;
-    }
-
-    // we overwrite the response of getsockopt(SO_ORIGINAL_DST)
-    // after the syscall has returned
-    // ordering matters here, if you set optlen after the changes in the
-    // socket addr, the verifier will bail on you
-    sockopt.optlen = mem::size_of_val(&sa) as i32;
-    unsafe {
-        (*sa).sin_family = sk.family as u16;
-        (*sa).sin_addr.s_addr = orig.dst_addr;
-        (*sa).sin_port = orig.dst_port;
-    }
     sockopt.retval = 0;
 
     TC_ACT_RECLASSIFY
