@@ -144,6 +144,7 @@ pub fn install_and_run(
     ebpf: &mut aya::Ebpf,
     ebpf_proxy_config: &EbpfProxyAddrConfig,
     ebpf_process: String,
+    ebpf_process_pid: Option<u32>,
 ) -> anyhow::Result<()> {
     let iface = ebpf_proxy_config.ifname.as_str();
 
@@ -176,23 +177,29 @@ pub fn install_and_run(
     let mut proxy_config_map: HashMap<_, u32, EbpfProxyConfig> =
         HashMap::try_from(ebpf_map).unwrap();
 
-    // Resolve process name to TGID if it's already running. When non-zero,
-    // the kernel matches all threads of that process by TGID (correct for
-    // multi-threaded runtimes like Bun/Node where the HTTP thread has a
-    // different comm than the process name).
-    let target_tgid = find_tgid_by_name(&ebpf_process).unwrap_or(0);
-    if target_tgid != 0 {
-        tracing::info!(
-            "Resolved '{}' to TGID {} for eBPF interception",
-            ebpf_process,
-            target_tgid
-        );
+    // Determine the target TGID:
+    // 1. --capture-pid takes precedence (explicit, unambiguous)
+    // 2. Otherwise scan /proc for the first process matching the name
+    // 3. Fall back to 0 (comm-prefix matching at the BPF layer)
+    let target_tgid = if let Some(pid) = ebpf_process_pid {
+        tracing::info!("Using explicit PID {} for eBPF interception", pid);
+        pid
     } else {
-        tracing::info!(
-            "'{}' not yet running; will match by process name when it starts",
-            ebpf_process
-        );
-    }
+        let tgid = find_tgid_by_name(&ebpf_process).unwrap_or(0);
+        if tgid != 0 {
+            tracing::info!(
+                "Resolved '{}' to TGID {} for eBPF interception",
+                ebpf_process,
+                tgid
+            );
+        } else {
+            tracing::info!(
+                "'{}' not yet running; will match by process name when it starts",
+                ebpf_process
+            );
+        }
+        tgid
+    };
 
     let mut config = EbpfProxyConfig {
         target_proc_name: [0; 16],
@@ -342,7 +349,8 @@ pub fn initialize_stealth(
     cli: &StealthCommandCommon,
     ebpf_proxy_config: &EbpfProxyAddrConfig,
 ) -> Option<Ebpf> {
-    let proc_name = cli.ebpf_process_name.clone().unwrap();
+    let proc_name = cli.ebpf_process_name.clone().unwrap_or_default();
+    let proc_pid = cli.ebpf_process_pid;
 
     #[allow(unused_variables)]
     let ebpf_guard = match cli.ebpf {
@@ -356,7 +364,12 @@ pub fn initialize_stealth(
                 tracing::warn!("failed to initialize eBPF logger: {}", e);
             }
 
-            let _ = install_and_run(&mut bpf, &ebpf_proxy_config, proc_name);
+            let _ = install_and_run(
+                &mut bpf,
+                &ebpf_proxy_config,
+                proc_name,
+                proc_pid,
+            );
 
             tracing::info!("Ebpf has been loaded");
 
@@ -373,7 +386,9 @@ pub fn initialize_stealth(
     stealth_options: &StealthCommandCommon,
     ebpf_proxy_config: &EbpfProxyAddrConfig,
 ) -> Option<Ebpf> {
-    let proc_name = stealth_options.ebpf_process_name.clone().unwrap();
+    let proc_name =
+        stealth_options.ebpf_process_name.clone().unwrap_or_default();
+    let proc_pid = stealth_options.ebpf_process_pid;
 
     #[allow(unused_variables)]
     let ebpf_guard = match stealth_options.ebpf {
@@ -407,7 +422,12 @@ pub fn initialize_stealth(
                 tracing::warn!("failed to initialize eBPF logger: {}", e);
             }
 
-            let _ = install_and_run(&mut bpf, ebpf_proxy_config, proc_name);
+            let _ = install_and_run(
+                &mut bpf,
+                ebpf_proxy_config,
+                proc_name,
+                proc_pid,
+            );
 
             tracing::info!("Ebpf has been loaded");
 

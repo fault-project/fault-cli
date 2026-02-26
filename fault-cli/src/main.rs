@@ -275,6 +275,34 @@ async fn main() -> Result<()> {
                                 format!("http:45580={}", endpoint).to_string(),
                             );
                         }
+                        types::LlmTarget::Claude => {
+                            http_proxies_disabled = true;
+
+                            let endpoint = settings.endpoint.unwrap_or(
+                                "https://api.anthropic.com:443".to_string(),
+                            );
+
+                            let _ = proxy_state.add_upstream_host(&endpoint);
+
+                            proxy_maps.insert(
+                                0,
+                                format!("https:45580={}", endpoint).to_string(),
+                            );
+                        }
+                        types::LlmTarget::OpenCode => {
+                            http_proxies_disabled = true;
+
+                            let endpoint = settings.endpoint.unwrap_or(
+                                "https://opencode.ai:443".to_string(),
+                            );
+
+                            let _ = proxy_state.add_upstream_host(&endpoint);
+
+                            proxy_maps.insert(
+                                0,
+                                format!("https:45580={}", endpoint).to_string(),
+                            );
+                        }
                     }
                 }
                 cli::RunCommands::Db { target, .. } => todo!(),
@@ -369,9 +397,11 @@ async fn main() -> Result<()> {
             ))]
             {
                 if stealth_mode {
-                    if options.common.stealth.ebpf_process_name.is_none() {
+                    if options.common.stealth.ebpf_process_name.is_none()
+                        && options.common.stealth.ebpf_process_pid.is_none()
+                    {
                         tracing::error!(
-                            "In stealth mode, you must pass a process name"
+                            "In stealth mode, you must pass --capture-process or --capture-pid"
                         );
                     } else {
                         match ebpf::get_ebpf_proxy(

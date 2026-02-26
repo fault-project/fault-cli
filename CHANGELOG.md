@@ -2,6 +2,9 @@
 
 ## Added
 
+- eBPF stealth mode: new `--capture-pid` flag to target a specific process by PID,
+  bypassing the `/proc` name scan — essential when multiple instances of the same
+  process are running (e.g. multiple opencode sessions)
 - eBPF stealth mode: match intercepted processes by TGID instead of thread comm, fixing
   capture of multi-threaded runtimes (Bun/Node) where the HTTP thread has a different
   comm than the process name (e.g. `HTTP Client` vs `opencode`)

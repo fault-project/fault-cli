@@ -189,6 +189,22 @@ pub struct StealthCommandCommon {
         target_os = "linux",
         any(feature = "stealth", feature = "stealth-auto-build")
     ))]
+    /// Capture traffic from a specific PID (TGID). Takes precedence over
+    /// --capture-process and avoids ambiguity when multiple instances of
+    /// the same process are running.
+    #[arg(
+        help_heading = "Stealth Options",
+        long = "capture-pid",
+        help = "PID of the process to intercept traffic from. Takes precedence over --capture-process.",
+        env = "FAULT_EBPF_PROCESS_PID",
+        value_parser
+    )]
+    pub ebpf_process_pid: Option<u32>,
+
+    #[cfg(all(
+        target_os = "linux",
+        any(feature = "stealth", feature = "stealth-auto-build")
+    ))]
     /// eBPF programs directory
     #[arg(
         help_heading = "Stealth Options",
