@@ -33,6 +33,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       rel_tag: ${{ steps.create.outputs.reltag }}
+      rel_id: ${{ steps.create.outputs.relid }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,6 +45,8 @@ jobs:
           rel_url=$(gh release create ${FAULT_VERSION} -d --notes-file CHANGELOG.md --latest=false --generate-notes)
           tag="${rel_url##*/}"
           echo "reltag=$tag" >> "$GITHUB_OUTPUT"
+          rel_id=$(gh release view "${tag}" --json id --jq '.id')
+          echo "relid=$rel_id" >> "$GITHUB_OUTPUT"
         env:
            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
            FAULT_VERSION: ${{needs.extract-version.outputs.version}}
@@ -206,19 +209,17 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
           asset_name: ${{ matrix.asset_name }}-${{needs.extract-version.outputs.version}}-${{ matrix.target }}
-          tag: ${{needs.create-the-release.outputs.rel_tag}}
+          release_id: ${{needs.create-the-release.outputs.rel_id}}
 
       - name: Upload binaries to release
         if: matrix.os == 'windows-latest'
         uses: svenstaro/upload-release-action@v2
-        env:
-           RELEASE_TAG: ${{needs.create-the-release.outputs.rel_tag}}
         with:
           promote: false
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
           asset_name: ${{ matrix.asset_name }}-${{needs.extract-version.outputs.version}}-${{ matrix.target }}.exe
-          tag: ${{needs.create-the-release.outputs.rel_tag}}
+          release_id: ${{needs.create-the-release.outputs.rel_id}}
 
       - name: Prepare assets (x86_64)
         if: matrix.os == 'ubuntu-24.04' && matrix.target == 'x86_64-unknown-linux-musl'
@@ -349,7 +350,7 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
           asset_name: fault-cli-ebpf-${{needs.extract-version.outputs.version}}-${{ matrix.target }}
-          tag: ${{needs.create-the-release.outputs.rel_tag}}
+          release_id: ${{needs.create-the-release.outputs.rel_id}}
 
       - name: Upload ebpf programs to release
         if: matrix.os == 'ubuntu-24.04'
@@ -359,7 +360,7 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: target/bpfel-unknown-none/release/fault-ebpf
           asset_name: fault-ebpf-programs-${{needs.extract-version.outputs.version}}-${{ matrix.target }}
-          tag: ${{needs.create-the-release.outputs.rel_tag}}
+          release_id: ${{needs.create-the-release.outputs.rel_id}}
 
       - name: Prepare assets (x86_64)
         if: matrix.os == 'ubuntu-24.04' && matrix.target == 'x86_64-unknown-linux-musl'
