@@ -1,7 +1,9 @@
-use std::sync::Arc;
 use std::fmt;
+use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::Result;
+use clap::ValueEnum;
 use serde::Deserialize;
 use serde::Serialize;
 use swiftide::integrations;
@@ -10,15 +12,15 @@ use swiftide_core::DynClone;
 use swiftide_core::EmbeddingModel;
 use swiftide_core::LanguageModelWithBackOff;
 use swiftide_core::SimplePrompt;
-use clap::ValueEnum;
-use std::str::FromStr;
 
 pub(crate) mod gemini;
 pub(crate) mod ollama;
 pub(crate) mod openai;
 pub(crate) mod openrouter;
 
-#[derive(ValueEnum, Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(
+    ValueEnum, Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum SupportedLLMClient {
     #[value(alias = "google", alias = "vertex", alias = "gemini-pro")]

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
-use std::{fs, path::Path, str::FromStr};
+use std::fs;
+use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use rmcp::{
@@ -9,31 +11,42 @@ use rmcp::{
     model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
     schemars::JsonSchema,
     serde::{Deserialize, Serialize},
-    serde_json::{self, json, Value},
-    tool, tool_handler, tool_router,
+    serde_json::{self, Value, json},
+    tool,
+    tool_handler,
+    tool_router,
 };
 use similar::TextDiff;
-use url::Url;
-
 use swiftide::indexing::EmbeddedField;
 use swiftide::integrations::fastembed::FastEmbed;
 use swiftide::integrations::qdrant::Qdrant;
 use swiftide::query;
-use swiftide::query::{answers, query_transformers};
-use swiftide_core::{EmbeddingModel, SimplePrompt};
+use swiftide::query::answers;
+use swiftide::query::query_transformers;
+use swiftide_core::EmbeddingModel;
+use swiftide_core::SimplePrompt;
+use url::Url;
 
 use crate::agent::CODE_COLLECTION;
-use crate::agent::clients::{get_client, SupportedLLMClient};
+use crate::agent::clients::SupportedLLMClient;
+use crate::agent::clients::get_client;
 use crate::agent::mcp::code;
-use crate::agent::mcp::code::{extract_function_snippet, guess_file_language, list_functions};
+use crate::agent::mcp::code::extract_function_snippet;
+use crate::agent::mcp::code::guess_file_language;
+use crate::agent::mcp::code::list_functions;
 use crate::report;
 use crate::report::types::Report;
 use crate::scenario::executor::run_scenario_first_item;
-use crate::scenario::types::{
-    Scenario, ScenarioItem, ScenarioItemCall, ScenarioItemCallStrategy, ScenarioItemContext,
-    ScenarioItemProxySettings, ScenarioItemSLO,
-};
-use crate::types::{BandwidthUnit, FaultConfiguration, StreamSide};
+use crate::scenario::types::Scenario;
+use crate::scenario::types::ScenarioItem;
+use crate::scenario::types::ScenarioItemCall;
+use crate::scenario::types::ScenarioItemCallStrategy;
+use crate::scenario::types::ScenarioItemContext;
+use crate::scenario::types::ScenarioItemProxySettings;
+use crate::scenario::types::ScenarioItemSLO;
+use crate::types::BandwidthUnit;
+use crate::types::FaultConfiguration;
+use crate::types::StreamSide;
 
 // -----------------------------------------------------------------------------
 // Helpers
@@ -44,7 +57,10 @@ fn strip_file_scheme(s: &str) -> &str {
 }
 
 fn mcp_internal(ctx: &'static str, e: impl ToString) -> McpError {
-    McpError::internal_error(ctx, Some(serde_json::json!({ "err": e.to_string() })))
+    McpError::internal_error(
+        ctx,
+        Some(serde_json::json!({ "err": e.to_string() })),
+    )
 }
 
 fn mcp_invalid(ctx: &'static str, extra: Value) -> McpError {
@@ -57,7 +73,9 @@ fn mcp_invalid(ctx: &'static str, extra: Value) -> McpError {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct CodeBlock {
-    #[schemars(description = "Full function block (signature + body + decorators)")]
+    #[schemars(
+        description = "Full function block (signature + body + decorators)"
+    )]
     pub full: String,
     #[schemars(description = "Function body only")]
     pub body: String,
@@ -264,15 +282,20 @@ struct DeepAnalysisResult {
 }
 
 // -----------------------------------------------------------------------------
-// Tool router: all tools live here, each takes Parameters<T> and returns Json<T>
+// Tool router: all tools live here, each takes Parameters<T> and returns
+// Json<T>
 // -----------------------------------------------------------------------------
 
-const PERF_TPL: &str = include_str!("../prompts/tool_score_code_performance.md");
+const PERF_TPL: &str =
+    include_str!("../prompts/tool_score_code_performance.md");
 const REL_TPL: &str = include_str!("../prompts/tool_score_code_reliability.md");
 const SLO_TPL: &str = include_str!("../prompts/tool_suggest_slo.md");
-const SUGG_PERF_TPL: &str = include_str!("../prompts/tool_suggest_perf_improvement.md");
-const SUGG_REL_TPL: &str = include_str!("../prompts/tool_suggest_reliability_improvement.md");
-const FULL_CHANGESET_TPL: &str = include_str!("../prompts/tool_suggest_complete_reliability_changeset.md");
+const SUGG_PERF_TPL: &str =
+    include_str!("../prompts/tool_suggest_perf_improvement.md");
+const SUGG_REL_TPL: &str =
+    include_str!("../prompts/tool_suggest_reliability_improvement.md");
+const FULL_CHANGESET_TPL: &str =
+    include_str!("../prompts/tool_suggest_complete_reliability_changeset.md");
 
 #[tool_router]
 impl FaultMCP {
@@ -287,15 +310,17 @@ impl FaultMCP {
         params: Parameters<ListFnParams>,
     ) -> Result<Json<ListFnResult>, McpError> {
         let path = strip_file_scheme(&params.0.file);
-        let src = fs::read_to_string(path).map_err(|e| mcp_internal("file_read", e))?;
+        let src = fs::read_to_string(path)
+            .map_err(|e| mcp_internal("file_read", e))?;
 
         let ext = Path::new(path)
             .extension()
             .and_then(|s| s.to_str())
             .ok_or_else(|| mcp_invalid("bad_uri", json!({ "file": path })))?;
 
-        let names = list_functions(&src, ext)
-            .ok_or_else(|| mcp_invalid("func_not_found", json!({ "file": path })))?;
+        let names = list_functions(&src, ext).ok_or_else(|| {
+            mcp_invalid("func_not_found", json!({ "file": path }))
+        })?;
 
         Ok(Json(ListFnResult { names }))
     }
@@ -309,7 +334,8 @@ impl FaultMCP {
         params: Parameters<ExtractBlockParams>,
     ) -> Result<Json<CodeBlock>, McpError> {
         let path = strip_file_scheme(&params.0.file);
-        let src = fs::read_to_string(path).map_err(|e| mcp_internal("file_read", e))?;
+        let src = fs::read_to_string(path)
+            .map_err(|e| mcp_internal("file_read", e))?;
 
         let ext = Path::new(path)
             .extension()
@@ -317,7 +343,9 @@ impl FaultMCP {
             .ok_or_else(|| mcp_invalid("bad_uri", json!({ "file": path })))?;
 
         let snippet = extract_function_snippet(&src, ext, &params.0.func)
-            .ok_or_else(|| mcp_invalid("func_not_found", json!({ "func": params.0.func })))?;
+            .ok_or_else(|| {
+                mcp_invalid("func_not_found", json!({ "func": params.0.func }))
+            })?;
 
         Ok(Json(CodeBlock { full: snippet.full, body: snippet.body }))
     }
@@ -359,10 +387,14 @@ impl FaultMCP {
             .replace("{lang}", &params.0.lang)
             .replace("{snippet}", &params.0.snippet);
 
-        let llm = get_client(self.llm_type, &self.prompt_model, &self.embed_model)
-            .map_err(|e| mcp_internal("client_build", e))?;
+        let llm =
+            get_client(self.llm_type, &self.prompt_model, &self.embed_model)
+                .map_err(|e| mcp_internal("client_build", e))?;
 
-        let answer = llm.prompt(prompt.into()).await.map_err(|e| mcp_internal("llm_prompt", e))?;
+        let answer = llm
+            .prompt(prompt.into())
+            .await
+            .map_err(|e| mcp_internal("llm_prompt", e))?;
         let parsed: Value = serde_json::from_str(&answer)
             .map_err(|e| mcp_internal("parse_score_response", e))?;
 
@@ -381,10 +413,14 @@ impl FaultMCP {
             .replace("{lang}", &params.0.lang)
             .replace("{snippet}", &params.0.snippet);
 
-        let llm = get_client(self.llm_type, &self.prompt_model, &self.embed_model)
-            .map_err(|e| mcp_internal("client_build", e))?;
+        let llm =
+            get_client(self.llm_type, &self.prompt_model, &self.embed_model)
+                .map_err(|e| mcp_internal("client_build", e))?;
 
-        let answer = llm.prompt(prompt.into()).await.map_err(|e| mcp_internal("llm_prompt", e))?;
+        let answer = llm
+            .prompt(prompt.into())
+            .await
+            .map_err(|e| mcp_internal("llm_prompt", e))?;
         let parsed: Value = serde_json::from_str(&answer)
             .map_err(|e| mcp_internal("parse_score_response", e))?;
 
@@ -407,8 +443,9 @@ impl FaultMCP {
             .replace("{score}", &params.0.score.to_string())
             .replace("{target_score}", &params.0.target_score.to_string());
 
-        let llm = get_client(self.llm_type, &self.prompt_model, &self.embed_model)
-            .map_err(|e| mcp_internal("client_build", e))?;
+        let llm =
+            get_client(self.llm_type, &self.prompt_model, &self.embed_model)
+                .map_err(|e| mcp_internal("client_build", e))?;
         let sp: Arc<dyn SimplePrompt> = llm.clone();
         let em: Arc<dyn EmbeddingModel> = llm.clone();
 
@@ -422,11 +459,16 @@ impl FaultMCP {
             .map_err(|e| mcp_internal("qdrant_builder", e))?;
 
         let pipeline = query::Pipeline::default()
-            .then_transform_query(query_transformers::Embed::from_client(em.clone()))
+            .then_transform_query(query_transformers::Embed::from_client(
+                em.clone(),
+            ))
             .then_retrieve(qdrant.clone())
             .then_answer(answers::Simple::from_client(sp.clone()));
 
-        let resp = pipeline.query(prompt).await.map_err(|e| mcp_internal("query", e))?;
+        let resp = pipeline
+            .query(prompt)
+            .await
+            .map_err(|e| mcp_internal("query", e))?;
         Ok(Json(DiffResult { diff: resp.answer().to_string() }))
     }
 
@@ -444,8 +486,9 @@ impl FaultMCP {
             .replace("{score}", &params.0.score.to_string())
             .replace("{target_score}", &params.0.target_score.to_string());
 
-        let llm = get_client(self.llm_type, &self.prompt_model, &self.embed_model)
-            .map_err(|e| mcp_internal("client_build", e))?;
+        let llm =
+            get_client(self.llm_type, &self.prompt_model, &self.embed_model)
+                .map_err(|e| mcp_internal("client_build", e))?;
         let sp: Arc<dyn SimplePrompt> = llm.clone();
         let em: Arc<dyn EmbeddingModel> = llm.clone();
 
@@ -459,11 +502,16 @@ impl FaultMCP {
             .map_err(|e| mcp_internal("qdrant_builder", e))?;
 
         let pipeline = query::Pipeline::default()
-            .then_transform_query(query_transformers::Embed::from_client(em.clone()))
+            .then_transform_query(query_transformers::Embed::from_client(
+                em.clone(),
+            ))
             .then_retrieve(qdrant.clone())
             .then_answer(answers::Simple::from_client(sp.clone()));
 
-        let resp = pipeline.query(prompt).await.map_err(|e| mcp_internal("query", e))?;
+        let resp = pipeline
+            .query(prompt)
+            .await
+            .map_err(|e| mcp_internal("query", e))?;
         Ok(Json(DiffResult { diff: resp.answer().to_string() }))
     }
 
@@ -476,22 +524,32 @@ impl FaultMCP {
         params: Parameters<FullChangesParams>,
     ) -> Result<Json<CodeChange>, McpError> {
         let path = strip_file_scheme(&params.0.file);
-        let lang = guess_file_language(path).map_err(|e| mcp_internal("guess_file_language", e))?;
-        let snippet = fs::read_to_string(path).map_err(|e| mcp_internal("read_file", e))?;
+        let lang = guess_file_language(path)
+            .map_err(|e| mcp_internal("guess_file_language", e))?;
+        let snippet = fs::read_to_string(path)
+            .map_err(|e| mcp_internal("read_file", e))?;
 
         let prompt = FULL_CHANGESET_TPL
             .replace("{lang}", &lang)
             .replace("{snippet}", &snippet);
 
-        let llm = get_client(self.llm_type, &self.prompt_model, &self.embed_model)
-            .map_err(|e| mcp_internal("client_build", e))?;
-        let answer = llm.prompt(prompt.into()).await.map_err(|e| mcp_internal("llm_prompt", e))?;
+        let llm =
+            get_client(self.llm_type, &self.prompt_model, &self.embed_model)
+                .map_err(|e| mcp_internal("client_build", e))?;
+        let answer = llm
+            .prompt(prompt.into())
+            .await
+            .map_err(|e| mcp_internal("llm_prompt", e))?;
 
         let mut parsed = CodeChange::default();
         if let Some(code) = code::extract_json_fence(&answer) {
-            parsed = serde_json::from_str(&code).map_err(|e| mcp_internal("parse_code_change", e))?;
+            parsed = serde_json::from_str(&code)
+                .map_err(|e| mcp_internal("parse_code_change", e))?;
 
-            let filename = Path::new(path).file_name().and_then(|os| os.to_str()).unwrap_or("file");
+            let filename = Path::new(path)
+                .file_name()
+                .and_then(|os| os.to_str())
+                .unwrap_or("file");
             parsed.diff = TextDiff::from_lines(&snippet, &parsed.new)
                 .unified_diff()
                 .context_radius(10)
@@ -514,9 +572,13 @@ impl FaultMCP {
             .replace("{lang}", &params.0.lang)
             .replace("{snippet}", &params.0.snippet);
 
-        let llm = get_client(self.llm_type, &self.prompt_model, &self.embed_model)
-            .map_err(|e| mcp_internal("client_build", e))?;
-        let answer = llm.prompt(prompt.into()).await.map_err(|e| mcp_internal("llm_prompt", e))?;
+        let llm =
+            get_client(self.llm_type, &self.prompt_model, &self.embed_model)
+                .map_err(|e| mcp_internal("client_build", e))?;
+        let answer = llm
+            .prompt(prompt.into())
+            .await
+            .map_err(|e| mcp_internal("llm_prompt", e))?;
 
         Ok(Json(TextResult { text: answer }))
     }
@@ -531,22 +593,37 @@ impl FaultMCP {
         &self,
         params: Parameters<ScenarioLatencyParams>,
     ) -> Result<Json<ScenarioResult>, McpError> {
-        let stream_side = if params.0.side == "client" { StreamSide::Client } else { StreamSide::Server };
+        let stream_side = if params.0.side == "client" {
+            StreamSide::Client
+        } else {
+            StreamSide::Server
+        };
         let fault = FaultConfiguration::Latency {
             distribution: Some("normal".to_string()),
             global: Some(!params.0.per_read_write_op),
             side: Some(stream_side),
             mean: Some(params.0.latency),
             stddev: Some(params.0.deviation),
-            min: None, max: None, shape: None, scale: None,
+            min: None,
+            max: None,
+            shape: None,
+            scale: None,
             direction: Some(params.0.direction),
             period: None,
         };
 
         let report = run_scenario(
-            params.0.url, params.0.method, params.0.body, params.0.duration,
-            fault, params.0.num_clients, params.0.rps, params.0.timeout, params.0.proxies,
-        ).await?;
+            params.0.url,
+            params.0.method,
+            params.0.body,
+            params.0.duration,
+            fault,
+            params.0.num_clients,
+            params.0.rps,
+            params.0.timeout,
+            params.0.proxies,
+        )
+        .await?;
 
         Ok(Json(ScenarioResult { report: report.render() }))
     }
@@ -559,7 +636,11 @@ impl FaultMCP {
         &self,
         params: Parameters<ScenarioBasicParams>,
     ) -> Result<Json<ScenarioResult>, McpError> {
-        let stream_side = if params.0.side == "client" { StreamSide::Client } else { StreamSide::Server };
+        let stream_side = if params.0.side == "client" {
+            StreamSide::Client
+        } else {
+            StreamSide::Server
+        };
         let fault = FaultConfiguration::Jitter {
             amplitude: params.0.amplitude,
             frequency: params.0.frequency,
@@ -569,9 +650,17 @@ impl FaultMCP {
         };
 
         let report = run_scenario(
-            params.0.url, params.0.method, params.0.body, params.0.duration,
-            fault, params.0.num_clients, params.0.rps, params.0.timeout, params.0.proxies,
-        ).await?;
+            params.0.url,
+            params.0.method,
+            params.0.body,
+            params.0.duration,
+            fault,
+            params.0.num_clients,
+            params.0.rps,
+            params.0.timeout,
+            params.0.proxies,
+        )
+        .await?;
 
         Ok(Json(ScenarioResult { report: report.render() }))
     }
@@ -584,7 +673,11 @@ impl FaultMCP {
         &self,
         params: Parameters<ScenarioBasicParams>,
     ) -> Result<Json<ScenarioResult>, McpError> {
-        let stream_side = if params.0.side == "client" { StreamSide::Client } else { StreamSide::Server };
+        let stream_side = if params.0.side == "client" {
+            StreamSide::Client
+        } else {
+            StreamSide::Server
+        };
         let fault = FaultConfiguration::Bandwidth {
             rate: params.0.rate,
             unit: BandwidthUnit::from_str(&params.0.unit).unwrap_or_default(),
@@ -594,9 +687,17 @@ impl FaultMCP {
         };
 
         let report = run_scenario(
-            params.0.url, params.0.method, params.0.body, params.0.duration,
-            fault, params.0.num_clients, params.0.rps, params.0.timeout, params.0.proxies,
-        ).await?;
+            params.0.url,
+            params.0.method,
+            params.0.body,
+            params.0.duration,
+            fault,
+            params.0.num_clients,
+            params.0.rps,
+            params.0.timeout,
+            params.0.proxies,
+        )
+        .await?;
 
         Ok(Json(ScenarioResult { report: report.render() }))
     }
@@ -609,7 +710,11 @@ impl FaultMCP {
         &self,
         params: Parameters<ScenarioBasicParams>,
     ) -> Result<Json<ScenarioResult>, McpError> {
-        let stream_side = if params.0.side == "client" { StreamSide::Client } else { StreamSide::Server };
+        let stream_side = if params.0.side == "client" {
+            StreamSide::Client
+        } else {
+            StreamSide::Server
+        };
         let fault = FaultConfiguration::PacketLoss {
             direction: Some(params.0.direction),
             side: Some(stream_side),
@@ -617,9 +722,17 @@ impl FaultMCP {
         };
 
         let report = run_scenario(
-            params.0.url, params.0.method, params.0.body, params.0.duration,
-            fault, params.0.num_clients, params.0.rps, params.0.timeout, params.0.proxies,
-        ).await?;
+            params.0.url,
+            params.0.method,
+            params.0.body,
+            params.0.duration,
+            fault,
+            params.0.num_clients,
+            params.0.rps,
+            params.0.timeout,
+            params.0.proxies,
+        )
+        .await?;
 
         Ok(Json(ScenarioResult { report: report.render() }))
     }
@@ -640,9 +753,17 @@ impl FaultMCP {
         };
 
         let report = run_scenario(
-            params.0.url, params.0.method, params.0.body, params.0.duration,
-            fault, params.0.num_clients, params.0.rps, params.0.timeout, params.0.proxies,
-        ).await?;
+            params.0.url,
+            params.0.method,
+            params.0.body,
+            params.0.duration,
+            fault,
+            params.0.num_clients,
+            params.0.rps,
+            params.0.timeout,
+            params.0.proxies,
+        )
+        .await?;
 
         Ok(Json(ScenarioResult { report: report.render() }))
     }
@@ -655,7 +776,11 @@ impl FaultMCP {
         &self,
         params: Parameters<ScenarioBasicParams>,
     ) -> Result<Json<ScenarioResult>, McpError> {
-        let stream_side = if params.0.side == "client" { StreamSide::Client } else { StreamSide::Server };
+        let stream_side = if params.0.side == "client" {
+            StreamSide::Client
+        } else {
+            StreamSide::Server
+        };
         let fault = FaultConfiguration::Blackhole {
             direction: Some(params.0.direction),
             side: Some(stream_side),
@@ -663,9 +788,17 @@ impl FaultMCP {
         };
 
         let report = run_scenario(
-            params.0.url, params.0.method, params.0.body, params.0.duration,
-            fault, params.0.num_clients, params.0.rps, params.0.timeout, params.0.proxies,
-        ).await?;
+            params.0.url,
+            params.0.method,
+            params.0.body,
+            params.0.duration,
+            fault,
+            params.0.num_clients,
+            params.0.rps,
+            params.0.timeout,
+            params.0.proxies,
+        )
+        .await?;
 
         Ok(Json(ScenarioResult { report: report.render() }))
     }
@@ -679,7 +812,8 @@ impl FaultMCP {
         params: Parameters<DeepAnalysisParams>,
     ) -> Result<Json<DeepAnalysisResult>, McpError> {
         let path = strip_file_scheme(&params.0.file);
-        let src = fs::read_to_string(path).map_err(|e| mcp_internal("file_read", e))?;
+        let src = fs::read_to_string(path)
+            .map_err(|e| mcp_internal("file_read", e))?;
 
         let ext = Path::new(path)
             .extension()
@@ -687,22 +821,33 @@ impl FaultMCP {
             .ok_or_else(|| mcp_internal("file_ext_not_found", path))?;
 
         let snippet = extract_function_snippet(&src, ext, &params.0.func)
-            .ok_or_else(|| mcp_invalid("func_not_found", json!({ "func": params.0.func })))?;
+            .ok_or_else(|| {
+                mcp_invalid("func_not_found", json!({ "func": params.0.func }))
+            })?;
 
-        let llm = get_client(self.llm_type, &self.prompt_model, &self.embed_model)
-            .map_err(|e| mcp_internal("client_build", e))?;
+        let llm =
+            get_client(self.llm_type, &self.prompt_model, &self.embed_model)
+                .map_err(|e| mcp_internal("client_build", e))?;
 
         let templates = vec![
-            ("performance", include_str!("../prompts/tool_eval_code_performance.md")),
-            ("reliability", include_str!("../prompts/tool_eval_code_reliability.md")),
-            ("threat",      include_str!("../prompts/tool_eval_code_scenario.md")),
+            (
+                "performance",
+                include_str!("../prompts/tool_eval_code_performance.md"),
+            ),
+            (
+                "reliability",
+                include_str!("../prompts/tool_eval_code_reliability.md"),
+            ),
+            ("threat", include_str!("../prompts/tool_eval_code_scenario.md")),
         ];
 
         let mut evaluations = Vec::new();
         let mut prompts = Vec::new();
 
         for (angle, tmpl) in templates {
-            if !params.0.concerns.is_empty() && !params.0.concerns.iter().any(|c| c == angle) {
+            if !params.0.concerns.is_empty()
+                && !params.0.concerns.iter().any(|c| c == angle)
+            {
                 continue;
             }
             let prompt = tmpl
@@ -710,7 +855,9 @@ impl FaultMCP {
                 .replace("{func}", &params.0.func)
                 .replace("{snippet}", &snippet.full)
                 .replace("{lang}", &params.0.lang);
-            let answer = llm.prompt(prompt.clone().into()).await
+            let answer = llm
+                .prompt(prompt.clone().into())
+                .await
                 .map_err(|e| mcp_internal("llm_prompt", e))?;
             prompts.push(prompt);
             evaluations.push(answer);
@@ -750,7 +897,8 @@ async fn run_scenario(
     timeout: u64,
     proxies: Vec<String>,
 ) -> Result<Report, McpError> {
-    let components = Url::parse(&url).map_err(|e| mcp_internal("parse_url", e))?;
+    let components =
+        Url::parse(&url).map_err(|e| mcp_internal("parse_url", e))?;
     let scheme = components.scheme();
     let host = components
         .host_str()
@@ -762,7 +910,8 @@ async fn run_scenario(
 
     let headers = if !body.is_empty() {
         let mut h = HashMap::<String, String>::new();
-        let _ = h.insert("content-type".to_owned(), "application/json".to_owned());
+        let _ =
+            h.insert("content-type".to_owned(), "application/json".to_owned());
         Some(h)
     } else {
         None
@@ -798,8 +947,18 @@ async fn run_scenario(
                     rps,
                 }),
                 slo: Some(vec![
-                    ScenarioItemSLO { slo_type: "latency".into(), title: "99% @ 350ms".into(), objective: 99.0, threshold: 350.0 },
-                    ScenarioItemSLO { slo_type: "latency".into(), title: "95% @ 200ms".into(), objective: 95.0, threshold: 200.0 },
+                    ScenarioItemSLO {
+                        slo_type: "latency".into(),
+                        title: "99% @ 350ms".into(),
+                        objective: 99.0,
+                        threshold: 350.0,
+                    },
+                    ScenarioItemSLO {
+                        slo_type: "latency".into(),
+                        title: "95% @ 200ms".into(),
+                        objective: 95.0,
+                        threshold: 200.0,
+                    },
                 ]),
                 proxy: Some(ScenarioItemProxySettings {
                     disable_http_proxies,
@@ -812,6 +971,8 @@ async fn run_scenario(
         config: None,
     };
 
-    let results = run_scenario_first_item(s).await.map_err(|e| mcp_internal("run_scenario", e))?;
+    let results = run_scenario_first_item(s)
+        .await
+        .map_err(|e| mcp_internal("run_scenario", e))?;
     Ok(report::builder::to_report(&results))
 }

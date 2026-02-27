@@ -97,7 +97,6 @@ pub async fn index(
     Ok(())
 }
 
-
 #[derive(Clone)]
 pub struct TagOpId {
     pub opids: Vec<String>,
@@ -134,15 +133,28 @@ impl Transformer for TagOpId {
         if let Some(v) = node.metadata.get(NAME_DEFINITIONS) {
             // v might be a comma-separated string or an array; handle both
             let defs: Vec<String> = match v {
-                Value::String(s) => s.split(',').map(|s| s.trim().to_string()).collect(),
-                Value::Array(arr) => arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect(),
+                Value::String(s) => {
+                    s.split(',').map(|s| s.trim().to_string()).collect()
+                }
+                Value::Array(arr) => arr
+                    .iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect(),
                 _ => Vec::new(),
             };
 
             for opid in &self.opids {
-                if let Some((m, score)) = find_best_similarity(opid, &defs.iter().map(|s| s.as_str()).collect::<Vec<_>>()) {
-                    tracing::debug!("Matched {} with {} score {}", opid, m, score);
-                    node.metadata.insert(opid, m);                   // inserts Value::String
+                if let Some((m, score)) = find_best_similarity(
+                    opid,
+                    &defs.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                ) {
+                    tracing::debug!(
+                        "Matched {} with {} score {}",
+                        opid,
+                        m,
+                        score
+                    );
+                    node.metadata.insert(opid, m); // inserts Value::String
                     node.metadata.insert("operation_id", json!(opid)); // inserts Value
                     break;
                 }
