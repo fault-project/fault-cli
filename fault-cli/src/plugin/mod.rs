@@ -26,8 +26,8 @@ use crate::fault::dns::FaultyResolverInjector;
 use crate::fault::http_error::HttpResponseFaultInjector;
 use crate::fault::jitter::JitterInjector;
 use crate::fault::latency::LatencyInjector;
-use crate::fault::llm::openai::OpenAiInjector;
-use crate::fault::llm::openai::SlowStreamInjector;
+use crate::fault::llm::inject::LlmInjector;
+use crate::fault::llm::inject::SlowStreamInjector;
 use crate::fault::packet_loss::PacketLossInjector;
 use crate::types::Direction;
 use crate::types::StreamSide;
@@ -147,13 +147,13 @@ pub fn load_injectors(config: &ProxyConfig) -> Vec<Box<dyn FaultInjector>> {
                 injectors.push(Box::new(BlackholeInjector::from(settings)))
             }
             FaultConfig::PromptScramble(settings) => {
-                injectors.push(Box::new(OpenAiInjector::from(settings)))
+                injectors.push(Box::new(LlmInjector::from(settings)))
             }
             FaultConfig::InjectBias(settings) => {
-                injectors.push(Box::new(OpenAiInjector::from(settings)))
+                injectors.push(Box::new(LlmInjector::from(settings)))
             }
             FaultConfig::TruncateResponse(settings) => {
-                injectors.push(Box::new(OpenAiInjector::from(settings)))
+                injectors.push(Box::new(LlmInjector::from(settings)))
             }
             FaultConfig::SlowStream(settings) => {
                 injectors.push(Box::new(SlowStreamInjector::from(settings)))
@@ -190,13 +190,13 @@ pub fn load_injector(fault: &FaultConfig) -> Box<dyn FaultInjector> {
             Box::new(BlackholeInjector::from(settings))
         }
         FaultConfig::PromptScramble(settings) => {
-            Box::new(OpenAiInjector::from(settings))
+            Box::new(LlmInjector::from(settings))
         }
         FaultConfig::InjectBias(settings) => {
-            Box::new(OpenAiInjector::from(settings))
+            Box::new(LlmInjector::from(settings))
         }
         FaultConfig::TruncateResponse(settings) => {
-            Box::new(OpenAiInjector::from(settings))
+            Box::new(LlmInjector::from(settings))
         }
         FaultConfig::SlowStream(settings) => {
             Box::new(SlowStreamInjector::from(settings))

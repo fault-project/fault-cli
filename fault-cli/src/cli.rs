@@ -15,7 +15,6 @@ use crate::agent::clients::SupportedLLMClient;
 use crate::agent::insight::ReportReviewRole;
 #[cfg(feature = "agent")]
 use crate::agent::platform::PlatformReviewRole;
-use crate::config::LlmSettings;
 #[cfg(feature = "discovery")]
 use crate::discovery::types::ResourcePlatform;
 use crate::types::BandwidthUnit;

@@ -50,7 +50,7 @@ use crate::types::LlmCase;
 use crate::types::StreamSide;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct OpenAiSettings {
+pub struct LlmSettings {
     pub case: LlmCase,
     pub pattern: Option<String>,
     pub replacement: Option<String>,
@@ -61,39 +61,39 @@ pub struct OpenAiSettings {
     pub direction: Direction,
 }
 
-/// Injector specialized for OpenAI‐style JSON payloads.
+/// Injector for LLM traffic (OpenAI-compatible and Anthropic/Claude APIs).
 #[derive(Clone, Debug)]
-pub struct OpenAiInjector {
-    settings: OpenAiSettings,
+pub struct LlmInjector {
+    settings: LlmSettings,
     regex: Option<Regex>,
 }
 
-impl OpenAiInjector {
-    pub fn new(settings: OpenAiSettings) -> Self {
+impl LlmInjector {
+    pub fn new(settings: LlmSettings) -> Self {
         let regex = match &settings.pattern {
             Some(p) => {
-                Some(Regex::new(&p).expect("Invalid regex for OpenAI injector"))
+                Some(Regex::new(&p).expect("Invalid regex for LLM injector"))
             }
             None => None,
         };
-        OpenAiInjector { settings, regex }
+        LlmInjector { settings, regex }
     }
 }
 
-impl From<&OpenAiSettings> for OpenAiInjector {
-    fn from(settings: &OpenAiSettings) -> Self {
-        OpenAiInjector::new(settings.clone())
+impl From<&LlmSettings> for LlmInjector {
+    fn from(settings: &LlmSettings) -> Self {
+        LlmInjector::new(settings.clone())
     }
 }
 
-impl std::fmt::Display for OpenAiInjector {
+impl std::fmt::Display for LlmInjector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "openai")
+        write!(f, "llm")
     }
 }
 
 #[async_trait]
-impl FaultInjector for OpenAiInjector {
+impl FaultInjector for LlmInjector {
     fn is_enabled(&self) -> bool {
         self.settings.probability > 0.0
     }
@@ -537,7 +537,7 @@ fn mutate_request(
     let mut doc: Value = match serde_json::from_slice(&body) {
         Ok(j) => j,
         Err(e) => {
-            tracing::warn!("Failed parsing OpenAI-like LLM request {}", e);
+            tracing::warn!("Failed parsing LLM request body as JSON: {}", e);
             return Ok(body);
         }
     };

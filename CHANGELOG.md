@@ -28,4 +28,8 @@
 
 ## Changed
 
+- Renamed `fault/llm/openai.rs` to `fault/llm/inject.rs` and updated types:
+  `OpenAiSettings` → `LlmSettings`, `OpenAiInjector` → `LlmInjector` — the
+  module already handles both OpenAI-compatible and Anthropic/Claude APIs so the
+  OpenAI-specific naming was misleading
 - Add proper DNS fault support

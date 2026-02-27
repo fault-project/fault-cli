@@ -17,8 +17,8 @@ use crate::cli::LlmOptions;
 //use crate::cli::PacketDuplicationOptions;
 use crate::cli::PacketLossOptions;
 use crate::cli::RunCommonOptions;
-use crate::fault::llm::openai::OpenAiSettings;
-use crate::fault::llm::openai::SlowStreamSettings;
+use crate::fault::llm::inject::LlmSettings;
+use crate::fault::llm::inject::SlowStreamSettings;
 use crate::types::BandwidthUnit;
 use crate::types::DbCase;
 use crate::types::Direction;
@@ -131,10 +131,6 @@ pub struct GrpcSettings {
     pub capabilities: Option<GrpcCapabilities>,
 }
 
-/// Internal Configuration for Llm faults
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
-pub struct LlmSettings {}
-
 /// Fault Configuration Enum
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum FaultConfig {
@@ -149,9 +145,9 @@ pub enum FaultConfig {
 
     // llm
     SlowStream(SlowStreamSettings),
-    PromptScramble(OpenAiSettings),
-    InjectBias(OpenAiSettings),
-    TruncateResponse(OpenAiSettings),
+    PromptScramble(LlmSettings),
+    InjectBias(LlmSettings),
+    TruncateResponse(LlmSettings),
 
     // dns
     Dns(DnsSettings),
@@ -425,7 +421,7 @@ impl From<(LlmCase, &LlmOptions)> for FaultConfig {
                 side: StreamSide::Server,
             }),
             LlmCase::PromptScramble => {
-                let s = OpenAiSettings {
+                let s = LlmSettings {
                     case: LlmCase::PromptScramble,
                     pattern: options.scramble_pattern.clone(),
                     replacement: options.scramble_with.clone(),
@@ -439,7 +435,7 @@ impl From<(LlmCase, &LlmOptions)> for FaultConfig {
             }
 
             LlmCase::InjectBias => {
-                let s = OpenAiSettings {
+                let s = LlmSettings {
                     case: LlmCase::InjectBias,
                     pattern: options.bias_pattern.clone(),
                     replacement: options.bias_replacement.clone(),
@@ -453,7 +449,7 @@ impl From<(LlmCase, &LlmOptions)> for FaultConfig {
             }
 
             LlmCase::TruncateResponse => {
-                let s = OpenAiSettings {
+                let s = LlmSettings {
                     case: LlmCase::TruncateResponse,
                     pattern: options.scramble_pattern.clone(),
                     replacement: options.scramble_with.clone(),

@@ -1,1 +1,1 @@
-pub mod openai;
+pub mod inject;
