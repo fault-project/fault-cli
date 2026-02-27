@@ -1,5 +1,6 @@
 use std::net::IpAddr;
 use std::net::SocketAddr;
+use std::net::ToSocketAddrs;
 
 use anyhow::Result;
 
@@ -33,11 +34,23 @@ impl ProxyMap {
         // Parse both sides with same logic, left defines protocol
         let (proto, listen_addr) = Self::parse_side(left, None)?;
         let (_, target_addr) = Self::parse_side(right, Some(proto))?;
-        let s: Option<SocketAddr> =
-            format!("{}:{}", &target_addr.host, target_addr.port).parse().ok();
-        let sock_addr = match s {
-            Some(sk) => sk,
-            None => return Err("failed to parse the remote socket".to_string()),
+        let addr_str = format!("{}:{}", &target_addr.host, target_addr.port);
+        let sock_addr = match addr_str.to_socket_addrs() {
+            Ok(mut addrs) => match addrs.next() {
+                Some(addr) => addr,
+                None => {
+                    return Err(format!(
+                        "Could not resolve address: {}",
+                        addr_str
+                    ));
+                }
+            },
+            Err(e) => {
+                return Err(format!(
+                    "Failed to parse or resolve '{}': {}",
+                    addr_str, e
+                ));
+            }
         };
 
         Ok(ProxyMap {

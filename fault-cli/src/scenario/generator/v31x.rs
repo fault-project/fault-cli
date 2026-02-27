@@ -106,7 +106,7 @@ fn parse_body(rb: &RequestBody, model: &V31) -> Option<String> {
                 ObjectOrReference::Object(obj_schema) => Schema::Object(
                     Box::new(ObjectOrReference::Object(obj_schema.clone())),
                 ),
-                ObjectOrReference::Ref { ref_path, ..  } => {
+                ObjectOrReference::Ref { ref_path, .. } => {
                     Schema::Object(Box::new(ObjectOrReference::Ref {
                         ref_path: ref_path.clone(),
                         summary: None,
@@ -140,7 +140,7 @@ pub fn instantiate_schema(
             // resolve the ObjectOrReference<ObjectSchema>
             let obj_schema: ObjectSchema = match &**boxed_oor {
                 ObjectOrReference::Object(o) => o.clone(),
-                ObjectOrReference::Ref { ref_path, ..  } => {
+                ObjectOrReference::Ref { ref_path, .. } => {
                     // use the FromRef impl to pull in the referenced schema
                     ObjectSchema::from_ref(spec, ref_path)
                         .expect("unresolvable schema ref")
@@ -160,7 +160,7 @@ fn instantiate_object(obj: &ObjectSchema, spec: &Spec) -> Value {
         .chain(&obj.any_of)
         .filter_map(|oor| match oor {
             ObjectOrReference::Object(o) => Some(o.clone()),
-            ObjectOrReference::Ref { ref_path, ..  } => {
+            ObjectOrReference::Ref { ref_path, .. } => {
                 ObjectSchema::from_ref(spec, &ref_path).ok()
             }
         })
@@ -176,7 +176,7 @@ fn instantiate_object(obj: &ObjectSchema, spec: &Spec) -> Value {
     for (name, oor) in &obj.properties {
         let child_schema = match oor {
             ObjectOrReference::Object(child) => child.clone(),
-            ObjectOrReference::Ref { ref_path, ..  } => {
+            ObjectOrReference::Ref { ref_path, .. } => {
                 ObjectSchema::from_ref(spec, ref_path)
                     .expect("unresolvable property schema ref")
             }

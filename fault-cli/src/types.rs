@@ -1002,6 +1002,8 @@ pub enum LlmTarget {
     OpenRouter,
     Gemini,
     Ollama,
+    Claude,
+    OpenCode,
 }
 
 #[derive(ValueEnum, Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
