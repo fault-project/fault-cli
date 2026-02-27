@@ -41,7 +41,12 @@ jobs:
       - name: Create fault release
         id: create
         run: |
-          gh release create ${FAULT_VERSION} --notes-file CHANGELOG.md --latest=false --generate-notes
+          if ! gh release view ${FAULT_VERSION} >/dev/null 2>&1; then
+            echo "Creating release ${FAULT_VERSION}..."
+            gh release create ${FAULT_VERSION} --notes-file CHANGELOG.md --latest=false --generate-notes
+          else
+            echo "Release ${FAULT_VERSION} already exists."
+          fi
           echo "reltag=${FAULT_VERSION}" >> "$GITHUB_OUTPUT"
         env:
            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
