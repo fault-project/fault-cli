@@ -320,25 +320,25 @@ jobs:
         if: matrix.target != 'x86_64-unknown-linux-musl' && matrix.target != 'aarch64-unknown-linux-musl'
         run: |
           cargo install bpf-linker --git https://github.com/aya-rs/bpf-linker.git
-          cargo +nightly build --profile prod-fast --features stealth --target ${{ matrix.target }}
+          cargo +nightly build --profile prod-fast -p fault-cli --features stealth --target ${{ matrix.target }}
           cargo +nightly build \
             --profile bpf \
             -p fault-ebpf-programs \
             --target=bpfel-unknown-none \
             -Z build-std=core
-        working-directory: ./fault-cli
+        working-directory: .
 
       - name: Build (static)
         if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
         run: |
           cargo install bpf-linker --git https://github.com/aya-rs/bpf-linker.git
-          cargo +nightly zigbuild --profile prod-fast --features stealth --target ${{ matrix.target }}
+          cargo +nightly zigbuild --profile prod-fast -p fault-cli --features stealth --target ${{ matrix.target }}
           cargo +nightly build \
             --profile bpf \
             -p fault-ebpf-programs \
             --target=bpfel-unknown-none \
             -Z build-std=core
-        working-directory: ./fault-cli
+        working-directory: .
 
       - name: Upload fault CLI with ebpf support to release
         uses: svenstaro/upload-release-action@v2
