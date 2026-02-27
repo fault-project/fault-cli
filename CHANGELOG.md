@@ -1,5 +1,7 @@
 # Changes
 
+## [0.17.0] - 2026-02-27
+
 ## Added
 
 - eBPF stealth mode: new `--capture-pid` flag to target a specific process by PID,
