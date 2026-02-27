@@ -1,5 +1,11 @@
 # Changes
 
+## [0.17.1] - 2026-02-27
+
+## Fixed
+
+- ci: set `aarch64-linux-gnu-gcc` as linker for `aarch64-unknown-linux-gnu` cross-compilation to fix x86_64/aarch64 ELF incompatibility error
+
 ## [0.17.0] - 2026-02-27
 
 ## Added

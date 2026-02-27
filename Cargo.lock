@@ -2648,7 +2648,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "fault-cli"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2765,7 +2765,7 @@ dependencies = [
 
 [[package]]
 name = "fault-ebpf-programs"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "aya-ebpf",
  "aya-log-ebpf",
