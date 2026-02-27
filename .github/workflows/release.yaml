@@ -97,30 +97,37 @@ jobs:
             os: macos-latest
             artifact_name: fault
             asset_name: fault-cli
+            profile: prod-fast
           - target: x86_64-apple-darwin
             os: macos-latest
             artifact_name: fault
             asset_name: fault-cli
+            profile: prod-fast
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
             artifact_name: fault
             asset_name: fault-cli
+            profile: prod-fast
           - target: x86_64-unknown-linux-musl
             os: ubuntu-24.04
             artifact_name: fault
             asset_name: fault-cli
+            profile: prod-small
           - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04
             artifact_name: fault
             asset_name: fault-cli
+            profile: prod-small
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04
             artifact_name: fault
             asset_name: fault-cli
+            profile: prod-fast
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             artifact_name: fault.exe
             asset_name: fault-cli
+            profile: prod-fast
 
     name: Build workspace on ${{ matrix.os }} / ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
@@ -184,17 +191,17 @@ jobs:
 
       - name: Build Linux/MacOSX (shared)
         if: matrix.os != 'windows-latest' && matrix.target != 'x86_64-unknown-linux-musl' && matrix.target != 'aarch64-unknown-linux-musl'
-        run: cargo +nightly build --locked --profile prod-fast --features agent --target ${{ matrix.target }}
+        run: cargo +nightly build --locked --profile ${{ matrix.profile }} --features agent --target ${{ matrix.target }}
         working-directory: ./fault-cli
 
       - name: Build Windows (shared)
         if: matrix.os == 'windows-latest'
-        run: cargo +nightly build --locked --profile prod-fast --target ${{ matrix.target }}
+        run: cargo +nightly build --locked --profile ${{ matrix.profile }} --target ${{ matrix.target }}
         working-directory: ./fault-cli
 
       - name: Build (static)
         if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
-        run: cargo +nightly zigbuild --locked --profile prod-small --target ${{ matrix.target }}
+        run: cargo +nightly zigbuild --locked --profile ${{ matrix.profile }} --target ${{ matrix.target }}
         working-directory: ./fault-cli
 
       - name: Upload binaries to release
@@ -203,7 +210,7 @@ jobs:
         with:
           promote: false
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+          file: target/${{ matrix.target }}/${{ matrix.profile }}/${{ matrix.artifact_name }}
           asset_name: ${{ matrix.asset_name }}-${{needs.extract-version.outputs.version}}-${{ matrix.target }}
           tag: ${{needs.create-the-release.outputs.rel_tag}}
 
@@ -213,7 +220,7 @@ jobs:
         with:
           promote: false
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+          file: target/${{ matrix.target }}/${{ matrix.profile }}/${{ matrix.artifact_name }}
           asset_name: ${{ matrix.asset_name }}-${{needs.extract-version.outputs.version}}-${{ matrix.target }}.exe
           tag: ${{needs.create-the-release.outputs.rel_tag}}
 
@@ -221,7 +228,7 @@ jobs:
         if: matrix.os == 'ubuntu-24.04' && matrix.target == 'x86_64-unknown-linux-musl'
         run: |
           mkdir -p ${TARGET_DIR}
-          cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} ${TARGET_DIR}
+          cp target/${{ matrix.target }}/${{ matrix.profile }}/${{ matrix.artifact_name }} ${TARGET_DIR}
         env:
           TARGET_DIR: fault-cli-${{needs.extract-version.outputs.version}}-amd64
 
@@ -229,7 +236,7 @@ jobs:
         if: matrix.os == 'ubuntu-24.04' && matrix.target == 'aarch64-unknown-linux-musl'
         run: |
           mkdir -p ${TARGET_DIR}
-          cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} ${TARGET_DIR}
+          cp target/${{ matrix.target }}/${{ matrix.profile }}/${{ matrix.artifact_name }} ${TARGET_DIR}
         env:
           TARGET_DIR: fault-cli-${{needs.extract-version.outputs.version}}-arm64
 
@@ -344,7 +351,7 @@ jobs:
         with:
           promote: false
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+          file: target/${{ matrix.target }}/prod-fast/${{ matrix.artifact_name }}
           asset_name: fault-cli-ebpf-${{needs.extract-version.outputs.version}}-${{ matrix.target }}
           tag: ${{needs.create-the-release.outputs.rel_tag}}
 
@@ -354,7 +361,7 @@ jobs:
         with:
           promote: false
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: target/bpfel-unknown-none/release/fault-ebpf
+          file: target/bpfel-unknown-none/bpf/fault-ebpf
           asset_name: fault-ebpf-programs-${{needs.extract-version.outputs.version}}-${{ matrix.target }}
           tag: ${{needs.create-the-release.outputs.rel_tag}}
 
@@ -362,8 +369,8 @@ jobs:
         if: matrix.os == 'ubuntu-24.04' && matrix.target == 'x86_64-unknown-linux-musl'
         run: |
           mkdir -p ${TARGET_DIR}
-          cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} ${TARGET_DIR}
-          cp target/bpfel-unknown-none/release/fault-ebpf ${TARGET_DIR}
+          cp target/${{ matrix.target }}/prod-fast/${{ matrix.artifact_name }} ${TARGET_DIR}
+          cp target/bpfel-unknown-none/bpf/fault-ebpf ${TARGET_DIR}
         env:
           TARGET_DIR: fault-ebpf-${{needs.extract-version.outputs.version}}-amd64
 
@@ -371,8 +378,8 @@ jobs:
         if: matrix.os == 'ubuntu-24.04' && matrix.target == 'aarch64-unknown-linux-musl'
         run: |
           mkdir -p ${TARGET_DIR}
-          cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} ${TARGET_DIR}
-          cp target/bpfel-unknown-none/release/fault-ebpf ${TARGET_DIR}
+          cp target/${{ matrix.target }}/prod-fast/${{ matrix.artifact_name }} ${TARGET_DIR}
+          cp target/bpfel-unknown-none/bpf/fault-ebpf ${TARGET_DIR}
         env:
           TARGET_DIR: fault-ebpf-${{needs.extract-version.outputs.version}}-arm64
 
