@@ -45,7 +45,7 @@ jobs:
           rel_url=$(gh release create ${FAULT_VERSION} -d --notes-file CHANGELOG.md --latest=false --generate-notes)
           tag="${rel_url##*/}"
           echo "reltag=$tag" >> "$GITHUB_OUTPUT"
-          rel_id=$(gh release view "${tag}" --json id --jq '.id')
+          rel_id=$(gh api repos/{owner}/{repo}/releases --jq ".[] | select(.tag_name==\"${tag}\") | .id")
           echo "relid=$rel_id" >> "$GITHUB_OUTPUT"
         env:
            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
