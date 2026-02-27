@@ -236,6 +236,10 @@ impl FaultInjector for OpenAiInjector {
 
         if rand::random::<f64>() < self.settings.probability {
             if let Some(instruction) = &self.settings.instruction {
+                tracing::debug!(
+                    "Injecting LLM stream content: {}",
+                    instruction
+                );
                 let _ = event.with_fault(FaultEvent::Llm {
                     direction: Direction::Ingress,
                     side: StreamSide::Client,
@@ -257,23 +261,47 @@ impl FaultInjector for OpenAiInjector {
                 // parse it to pull out `id` and `model`
                 let meta: Value = serde_json::from_slice(&first_chunk)
                     .unwrap_or_else(|_| json!({}));
-                let id = meta.get("id").and_then(Value::as_str).unwrap_or("");
-                let model =
-                    meta.get("model").and_then(Value::as_str).unwrap_or("");
 
-                let payload = json!({
-                    "id":       id,
-                    "model":    model,
-                    "choices": [{ "delta": { "role": "assistant", "content": instruction }, "index": 0, "finish_reason": null }]
-                })
-                .to_string();
-                let mut framed = String::new();
-                for line in payload.lines() {
-                    framed.push_str("data: ");
-                    framed.push_str(line);
-                    framed.push('\n');
-                }
-                framed.push('\n');
+                // Detect whether this is a Claude stream (message_start) or
+                // an OpenAI stream (choices[]/id at top level) and build the
+                // injected instruction chunk accordingly.
+                let framed = if meta.get("type").and_then(Value::as_str)
+                    == Some("message_start")
+                {
+                    // Claude SSE: emit a content_block_delta event carrying
+                    // the instruction as a text_delta.
+                    let payload = json!({
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": { "type": "text_delta", "text": instruction }
+                    })
+                    .to_string();
+                    format!("data: {}\n\n", payload)
+                } else {
+                    // OpenAI SSE: emit a choices[0].delta.content chunk.
+                    let id =
+                        meta.get("id").and_then(Value::as_str).unwrap_or("");
+                    let model =
+                        meta.get("model").and_then(Value::as_str).unwrap_or("");
+                    let payload = json!({
+                        "id":    id,
+                        "model": model,
+                        "choices": [{
+                            "delta": { "role": "assistant", "content": instruction },
+                            "index": 0,
+                            "finish_reason": null
+                        }]
+                    })
+                    .to_string();
+                    let mut f = String::new();
+                    for line in payload.lines() {
+                        f.push_str("data: ");
+                        f.push_str(line);
+                        f.push('\n');
+                    }
+                    f.push('\n');
+                    f
+                };
                 let sys_bytes = Bytes::from(framed);
 
                 let new_stream =
@@ -514,7 +542,8 @@ fn mutate_request(
         }
     };
 
-    //tracing::debug!("LLM request {}", doc);
+    tracing::debug!("mutate_request: path={}", path);
+    tracing::trace!("mutate_request: raw body={}", doc);
 
     if path.starts_with("/v1/chat/completions")
         || path.starts_with("/api/v1/chat/completions")
@@ -524,11 +553,24 @@ fn mutate_request(
             if let Some(arr) =
                 doc.get_mut("messages").and_then(Value::as_array_mut)
             {
+                tracing::debug!(
+                    "mutate_request: inserting system message: {}",
+                    sp
+                );
                 let sys_msg = serde_json::json!({
                     "role": "system",
                     "content": sp,
                 });
-                arr.insert(arr.len(), sys_msg);
+                // Insert before the first non-system message so the
+                // instruction takes effect rather than being ignored at the
+                // tail of the array.
+                let insert_pos = arr
+                    .iter()
+                    .position(|m| {
+                        m.get("role").and_then(Value::as_str) != Some("system")
+                    })
+                    .unwrap_or(arr.len());
+                arr.insert(insert_pos, sys_msg);
             }
         }
 
@@ -542,7 +584,154 @@ fn mutate_request(
                             if let Some(orig) = content_val.as_str() {
                                 let new =
                                     rgx.replace_all(orig, &rep).to_string();
+                                tracing::debug!(
+                                    "mutate_request: scrambled message content: {:?} -> {:?}",
+                                    orig,
+                                    new
+                                );
                                 *content_val = Value::String(new);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let out = serde_json::to_vec(&doc)
+            .map_err(|e| ProxyError::Other(e.to_string()))?;
+
+        return Ok(out);
+    } else if path.starts_with("/v1/messages") {
+        if let Some(sp) = instruction {
+            // Append to any existing system prompt rather than replacing it.
+            // The Anthropic API accepts system as either a plain string or an
+            // array of content blocks. We normalise to a string in both cases
+            // and concatenate our instruction so the model sees both.
+            let existing = match doc.get("system") {
+                Some(Value::String(s)) if !s.is_empty() => {
+                    tracing::debug!(
+                        "mutate_request: appending instruction to existing system string (len={})",
+                        s.len()
+                    );
+                    format!("{}\n\n{}", s, sp)
+                }
+                Some(Value::Array(blocks)) => {
+                    tracing::debug!(
+                        "mutate_request: appending instruction to existing system blocks (count={})",
+                        blocks.len()
+                    );
+                    let joined: String = blocks
+                        .iter()
+                        .filter_map(|b| b.get("text").and_then(Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join("\n\n");
+                    if joined.is_empty() {
+                        sp.clone()
+                    } else {
+                        format!("{}\n\n{}", joined, sp)
+                    }
+                }
+                _ => {
+                    tracing::debug!(
+                        "mutate_request: no existing system field, setting instruction directly"
+                    );
+                    sp.clone()
+                }
+            };
+            tracing::debug!(
+                "mutate_request: final system field (first 200 chars): {:?}",
+                &existing[..existing.len().min(200)]
+            );
+            doc["system"] = serde_json::Value::String(existing);
+
+            // Also inject the instruction as a <system-reminder> block
+            // appended to the last user message. Claude Code delivers its own
+            // high-priority instructions this way, so the model treats them
+            // with equal weight to the application's own reminders.
+            let reminder_block = serde_json::json!({
+                "type": "text",
+                "text": format!("<system-reminder>\n{}\n</system-reminder>", sp)
+            });
+            if let Some(messages) =
+                doc.get_mut("messages").and_then(Value::as_array_mut)
+            {
+                // Find the last user message and append the block to its
+                // content array. If content is a plain string, convert it
+                // to an array first.
+                if let Some(last_user) = messages.iter_mut().rev().find(|m| {
+                    m.get("role").and_then(Value::as_str) == Some("user")
+                }) {
+                    match last_user.get_mut("content") {
+                        Some(Value::Array(blocks)) => {
+                            tracing::debug!(
+                                "mutate_request: appending system-reminder block to last user message (existing blocks: {})",
+                                blocks.len()
+                            );
+                            blocks.push(reminder_block);
+                        }
+                        Some(Value::String(s)) => {
+                            tracing::debug!(
+                                "mutate_request: converting last user message content to array and appending system-reminder"
+                            );
+                            let text_block = serde_json::json!({
+                                "type": "text",
+                                "text": s.clone()
+                            });
+                            *last_user.get_mut("content").unwrap() =
+                                serde_json::json!([text_block, reminder_block]);
+                        }
+                        _ => {
+                            tracing::debug!(
+                                "mutate_request: last user message has no content field, skipping system-reminder injection"
+                            );
+                        }
+                    }
+                } else {
+                    tracing::debug!(
+                        "mutate_request: no user message found, skipping system-reminder injection"
+                    );
+                }
+            }
+        }
+
+        if let Some(rgx) = regex {
+            if let Some(rep) = replacement {
+                if let Some(arr) =
+                    doc.get_mut("messages").and_then(Value::as_array_mut)
+                {
+                    for msg in arr {
+                        if let Some(content_val) = msg.get_mut("content") {
+                            match content_val {
+                                Value::String(s) => {
+                                    let new =
+                                        rgx.replace_all(s, &rep).to_string();
+                                    tracing::debug!(
+                                        "mutate_request: scrambled string content: {:?} -> {:?}",
+                                        s,
+                                        new
+                                    );
+                                    *content_val = Value::String(new);
+                                }
+                                Value::Array(blocks) => {
+                                    for block in blocks {
+                                        if let Some(text) =
+                                            block.get_mut("text")
+                                        {
+                                            if let Some(orig) = text.as_str() {
+                                                let new = rgx
+                                                    .replace_all(orig, &rep)
+                                                    .to_string();
+                                                tracing::debug!(
+                                                    "mutate_request: scrambled block text: {:?} -> {:?}",
+                                                    orig,
+                                                    new
+                                                );
+                                                *text = Value::String(new);
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -558,7 +747,27 @@ fn mutate_request(
         || path.starts_with("/api/v1/responses")
     {
         if let Some(sp) = instruction {
-            doc["instructions"] = serde_json::Value::String(sp);
+            // Append to any existing instructions rather than replacing them.
+            let existing = match doc.get("instructions") {
+                Some(Value::String(s)) if !s.is_empty() => {
+                    tracing::debug!(
+                        "mutate_request: appending instruction to existing instructions (len={})",
+                        s.len()
+                    );
+                    format!("{}\n\n{}", s, sp)
+                }
+                _ => {
+                    tracing::debug!(
+                        "mutate_request: no existing instructions field, setting directly"
+                    );
+                    sp
+                }
+            };
+            tracing::debug!(
+                "mutate_request: final instructions (first 200 chars): {:?}",
+                &existing[..existing.len().min(200)]
+            );
+            doc["instructions"] = serde_json::Value::String(existing);
         }
 
         if let (Some(rgx), Some(rep)) = (regex, replacement) {
@@ -601,8 +810,12 @@ fn scramble_response(
 ) -> Result<Vec<u8>, ProxyError> {
     match serde_json::from_slice::<Value>(&body) {
         Ok(mut doc) => {
+            tracing::trace!("scramble_response: raw body={}", doc);
             if let Some(object) = doc.get("object").and_then(Value::as_str) {
                 if object == "chat.completion" {
+                    tracing::debug!(
+                        "scramble_response: OpenAI chat.completion response"
+                    );
                     if let Some(choices) =
                         doc.get_mut("choices").and_then(Value::as_array_mut)
                     {
@@ -616,6 +829,11 @@ fn scramble_response(
                                         let replaced = regex
                                             .replace_all(orig_str, replacement)
                                             .to_string();
+                                        tracing::debug!(
+                                            "scramble_response: rewrote choice content ({} chars -> {} chars)",
+                                            orig_str.len(),
+                                            replaced.len()
+                                        );
                                         *content_val = Value::String(replaced);
                                     }
                                 }
@@ -624,38 +842,45 @@ fn scramble_response(
                     }
                     return Ok(serde_json::to_vec(&doc)
                         .map_err(|e| ProxyError::Other(e.to_string()))?);
-                } else if object == "response" {
-                    if let Some(outputs) =
-                        doc.get_mut("output").and_then(Value::as_array_mut)
-                    {
-                        for output in outputs {
-                            if let Some(content) = output
-                                .get_mut("content")
-                                .and_then(Value::as_array_mut)
-                            {
-                                for c in content {
-                                    if let Some(text) = c.get_mut("text") {
-                                        if let Some(orig_str) = text.as_str() {
-                                            let replaced = regex
-                                                .replace_all(
-                                                    orig_str,
-                                                    replacement,
-                                                )
-                                                .to_string();
-                                            *text = Value::String(replaced);
-                                        }
+                } else if let Some(type_val) =
+                    doc.get("type").and_then(Value::as_str)
+                {
+                    if type_val == "message" {
+                        tracing::debug!(
+                            "scramble_response: Anthropic message response"
+                        );
+                        if let Some(content) =
+                            doc.get_mut("content").and_then(Value::as_array_mut)
+                        {
+                            for block in content {
+                                if let Some(text) = block.get_mut("text") {
+                                    if let Some(orig_str) = text.as_str() {
+                                        let replaced = regex
+                                            .replace_all(orig_str, replacement)
+                                            .to_string();
+                                        tracing::debug!(
+                                            "scramble_response: rewrote Anthropic content block ({} chars -> {} chars)",
+                                            orig_str.len(),
+                                            replaced.len()
+                                        );
+                                        *text = Value::String(replaced);
                                     }
                                 }
                             }
                         }
+                        return Ok(serde_json::to_vec(&doc)
+                            .map_err(|e| ProxyError::Other(e.to_string()))?);
                     }
-                    return Ok(serde_json::to_vec(&doc)
-                        .map_err(|e| ProxyError::Other(e.to_string()))?);
                 }
             }
+            tracing::debug!(
+                "scramble_response: unrecognised response shape, object={:?} type={:?} — passing through",
+                doc.get("object"),
+                doc.get("type")
+            );
         }
         Err(e) => {
-            tracing::error!("Failed to parse OpenAI-like response: {:?}", e)
+            tracing::error!("Failed to parse LLM response body: {:?}", e)
         }
     }
 
@@ -751,9 +976,12 @@ fn rewrite_sse_stream(
                         continue;
                     }
 
-                    // Let's try rewriting choices[0].delta.content
+                    // Try rewriting choices[0].delta.content (OpenAI)
+                    // or content_block_delta.delta.text (Claude)
                     match serde_json::from_str::<Value>(&data_payload) {
                         Ok(mut json) => {
+                            let mut modified = false;
+
                             if let Some(content_val) = json
                                 .get_mut("choices")
                                 .and_then(|c| c.get_mut(0))
@@ -765,8 +993,73 @@ fn rewrite_sse_stream(
                                     let replaced = regex
                                         .replace_all(content_str, rep.as_str())
                                         .to_string();
+                                    tracing::debug!(
+                                        "rewrite_sse_stream: OpenAI delta rewritten ({} chars -> {} chars)",
+                                        content_str.len(),
+                                        replaced.len()
+                                    );
                                     *content_val = Value::String(replaced);
+                                    modified = true;
                                 }
+                            }
+
+                            if !modified {
+                                // Claude SSE: top-level "type" is
+                                // "content_block_delta"; text lives at
+                                // delta.text (delta.type == "text_delta")
+                                match json
+                                    .get("type")
+                                    .and_then(|t| t.as_str())
+                                {
+                                    Some(event_type) => {
+                                        tracing::trace!(
+                                            "rewrite_sse_stream: SSE event type={:?}",
+                                            event_type
+                                        );
+                                        if event_type == "content_block_delta" {
+                                            if let Some(text) = json
+                                                .get_mut("delta")
+                                                .and_then(|d| d.get_mut("text"))
+                                            {
+                                                if let Some(text_str) =
+                                                    text.as_str()
+                                                {
+                                                    let replaced = regex
+                                                        .replace_all(
+                                                            text_str,
+                                                            rep.as_str(),
+                                                        )
+                                                        .to_string();
+                                                    tracing::debug!(
+                                                        "rewrite_sse_stream: Claude delta rewritten ({} chars -> {} chars)",
+                                                        text_str.len(),
+                                                        replaced.len()
+                                                    );
+                                                    *text =
+                                                        Value::String(replaced);
+                                                    modified = true;
+                                                }
+                                            } else {
+                                                tracing::debug!(
+                                                    "rewrite_sse_stream: content_block_delta has no delta.text — delta={:?}",
+                                                    json.get("delta")
+                                                );
+                                            }
+                                        }
+                                    }
+                                    None => {
+                                        tracing::debug!(
+                                            "rewrite_sse_stream: no 'type' field and no OpenAI choices — event not rewritten: {}",
+                                            data_payload
+                                        );
+                                    }
+                                }
+                            }
+
+                            if !modified {
+                                tracing::trace!(
+                                    "rewrite_sse_stream: event passed through unmodified"
+                                );
                             }
 
                             // Re-serialize + emit, preserving headers
@@ -789,6 +1082,10 @@ fn rewrite_sse_stream(
                         }
                         Err(_) => {
                             // Not JSON? Emit original event
+                            tracing::debug!(
+                                "rewrite_sse_stream: non-JSON SSE data, passing through: {:?}",
+                                &data_payload[..data_payload.len().min(80)]
+                            );
                             out.push_str(&event);
                             out.push_str("\n\n");
                         }

@@ -452,10 +452,32 @@ async fn main() -> Result<()> {
 
             let extra_faults = match options.run_command() {
                 cli::RunCommands::Proxy {} => Vec::new(),
-                cli::RunCommands::Llm { target, cases, settings } => cases
-                    .iter()
-                    .map(|c| FaultConfig::from((c.clone(), &settings)))
-                    .collect(),
+                cli::RunCommands::Llm { target, cases, settings } => {
+                    // If the user supplied no --case flags but did supply
+                    // fault-specific options, infer the most appropriate case
+                    // so they don't have to repeat themselves.
+                    let effective_cases: Vec<types::LlmCase> =
+                        if cases.is_empty() {
+                            if settings.bias_pattern.is_some()
+                                || settings.bias_replacement.is_some()
+                            {
+                                vec![types::LlmCase::InjectBias]
+                            } else if settings.instruction.is_some()
+                                || settings.scramble_pattern.is_some()
+                                || settings.scramble_with.is_some()
+                            {
+                                vec![types::LlmCase::PromptScramble]
+                            } else {
+                                cases.clone()
+                            }
+                        } else {
+                            cases.clone()
+                        };
+                    effective_cases
+                        .iter()
+                        .map(|c| FaultConfig::from((c.clone(), &settings)))
+                        .collect()
+                }
                 cli::RunCommands::Db { target, cases, settings } => cases
                     .iter()
                     .map(|c| FaultConfig::from((c.clone(), &settings)))
