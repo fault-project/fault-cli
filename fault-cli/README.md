@@ -32,20 +32,28 @@ fault is distributed as built bianries on GitHub. Please refer to the
 
 ### Using cargo
 
+Due to pending upstream dependencies releases (aya-rs), we cannot currently
+publish `fault` to crates.io. Please install using the git repository as shown
+below.
+
 The fault proxy is installed as follows
 
 ```bash
-cargo +nightly install fault-cli
+cargo +nightly install --git https://github.com/fault-project/fault-cli fault-cli
 ```
 
 If you want to enable ebpf support (highly experimental and likely broken):
 
 ```bash
-cargo +nightly install fault-cli --features stealth
+cargo +nightly install --git https://github.com/fault-project/fault-cli fault-cli --features stealth
 ```
 
 In that case you will also need to install the
 [fault ebpf programs](https://crates.io/crates/fault-ebpf-programs).
+
+```bash
+cargo +nightly install --git https://github.com/fault-project/fault-cli fault-ebpf-programs --target=bpfel-unknown-none -Z build-std=core
+```
 
 ## Run
 
