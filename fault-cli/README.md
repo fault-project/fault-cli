@@ -49,7 +49,7 @@ cargo +nightly install --git https://github.com/fault-project/fault-cli fault-cl
 ```
 
 In that case you will also need to install the
-[fault ebpf programs](https://crates.io/crates/fault-ebpf-programs).
+`fault-ebpf-programs` crate from the repository:
 
 ```bash
 cargo +nightly install --git https://github.com/fault-project/fault-cli fault-ebpf-programs --target=bpfel-unknown-none -Z build-std=core
