@@ -19,7 +19,7 @@ use rmcp::{
 use similar::TextDiff;
 use swiftide::indexing::EmbeddedField;
 use swiftide::integrations::fastembed::FastEmbed;
-use swiftide::integrations::qdrant::Qdrant;
+use swiftide::integrations::lancedb::LanceDB;
 use swiftide::query;
 use swiftide::query::answers;
 use swiftide::query::query_transformers;
@@ -449,20 +449,20 @@ impl FaultMCP {
         let sp: Arc<dyn SimplePrompt> = llm.clone();
         let em: Arc<dyn EmbeddingModel> = llm.clone();
 
-        let qdrant: Qdrant = Qdrant::builder()
-            .batch_size(50)
-            .vector_size(self.embed_model_dim)
+        let lancedb: LanceDB = LanceDB::builder()
+            .uri(crate::agent::LANCEDB_URI)
+            .table_name(CODE_COLLECTION)
+            .batch_size(50usize)
+            .vector_size(self.embed_model_dim as i32)
             .with_vector(EmbeddedField::Combined)
-            .with_sparse_vector(EmbeddedField::Combined)
-            .collection_name(CODE_COLLECTION)
             .build()
-            .map_err(|e| mcp_internal("qdrant_builder", e))?;
+            .map_err(|e| mcp_internal("lancedb_builder", e))?;
 
         let pipeline = query::Pipeline::default()
             .then_transform_query(query_transformers::Embed::from_client(
                 em.clone(),
             ))
-            .then_retrieve(qdrant.clone())
+            .then_retrieve(lancedb.clone())
             .then_answer(answers::Simple::from_client(sp.clone()));
 
         let resp = pipeline
@@ -492,20 +492,20 @@ impl FaultMCP {
         let sp: Arc<dyn SimplePrompt> = llm.clone();
         let em: Arc<dyn EmbeddingModel> = llm.clone();
 
-        let qdrant: Qdrant = Qdrant::builder()
-            .batch_size(50)
-            .vector_size(self.embed_model_dim)
+        let lancedb: LanceDB = LanceDB::builder()
+            .uri(crate::agent::LANCEDB_URI)
+            .table_name(CODE_COLLECTION)
+            .batch_size(50usize)
+            .vector_size(self.embed_model_dim as i32)
             .with_vector(EmbeddedField::Combined)
-            .with_sparse_vector(EmbeddedField::Combined)
-            .collection_name(CODE_COLLECTION)
             .build()
-            .map_err(|e| mcp_internal("qdrant_builder", e))?;
+            .map_err(|e| mcp_internal("lancedb_builder", e))?;
 
         let pipeline = query::Pipeline::default()
             .then_transform_query(query_transformers::Embed::from_client(
                 em.clone(),
             ))
-            .then_retrieve(qdrant.clone())
+            .then_retrieve(lancedb.clone())
             .then_answer(answers::Simple::from_client(sp.clone()));
 
         let resp = pipeline

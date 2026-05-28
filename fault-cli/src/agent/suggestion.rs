@@ -6,19 +6,14 @@ use anyhow::Result;
 use async_trait::async_trait;
 use inquire::Select;
 use kanal::AsyncSender;
-use qdrant_client::qdrant::Filter;
 use swiftide::chat_completion::ToolCall;
 use swiftide::chat_completion::ToolOutput;
 use swiftide::chat_completion::errors::ToolError;
-use swiftide::indexing::EmbeddedField;
-use swiftide::integrations::fastembed::FastEmbed;
-use swiftide::integrations::qdrant;
-use swiftide::integrations::qdrant::Qdrant;
-use swiftide::integrations::{self};
+use swiftide::integrations::lancedb::LanceDB;
 use swiftide::query::Query;
 use swiftide::query::answers;
 use swiftide::query::query_transformers;
-use swiftide::query::search_strategies::HybridSearch;
+use swiftide::query::search_strategies::SimilaritySingleEmbedding;
 use swiftide::query::states;
 use swiftide::query::{self};
 use swiftide::tool;
@@ -26,7 +21,6 @@ use swiftide_agents::Agent;
 use swiftide_core::AgentContext;
 use swiftide_core::CommandError;
 use swiftide_core::CommandOutput;
-use swiftide_core::Retrieve;
 use swiftide_core::TransformResponse;
 use swiftide_macros::Tool;
 use tera::Context;
@@ -43,41 +37,6 @@ fn select_meta(pairs: &Vec<Meta>) -> Result<Meta> {
             .prompt()?;
 
     Ok(meta)
-}
-
-#[derive(Clone)]
-struct OpIdRetriever {
-    qdrant: Qdrant,
-    opid: String,
-}
-
-#[async_trait]
-impl Retrieve<HybridSearch<Filter>> for OpIdRetriever {
-    async fn retrieve(
-        &self,
-        strategy: &HybridSearch<Filter>,
-        query: Query<states::Pending>,
-    ) -> Result<Query<states::Retrieved>> {
-        let q = self
-            .qdrant
-            .retrieve(strategy, query)
-            .await
-            .map_err(|e| SuggestionError::Retrieval(e.to_string()))?;
-
-        let filtered = q
-            .documents()
-            .iter()
-            .cloned()
-            .filter(|doc| {
-                doc.metadata()
-                    .get("operation_id")
-                    .map(|m| m == &self.opid)
-                    .unwrap_or(false)
-            })
-            .collect();
-
-        Ok(q.retrieved_documents(filtered))
-    }
 }
 
 #[derive(Clone)]
@@ -225,24 +184,19 @@ impl InjectCode {
         );
         let llm = get_client(&self.prompt_model, &self.embed_model)?;
 
-        let fastembed_sparse = FastEmbed::try_default_sparse()?;
-        //let fastembed = FastEmbed::try_default()?;
-
-        let search_strategy =
-            HybridSearch::default().with_top_n(10).with_top_k(5).to_owned();
-
-        let qdrant: Qdrant = Qdrant::builder()
-            .batch_size(50)
-            .vector_size(self.embed_model_dim)
-            .with_vector(EmbeddedField::Combined)
-            .with_sparse_vector(EmbeddedField::Combined)
-            .collection_name(CODE_COLLECTION)
+        let lancedb: LanceDB = LanceDB::builder()
+            .uri(crate::agent::LANCEDB_URI)
+            .table_name(CODE_COLLECTION)
+            .batch_size(50usize)
+            .vector_size(self.embed_model_dim as i32)
             .build()?;
 
-        let retriever = OpIdRetriever {
-            qdrant: qdrant.clone(),
-            opid: self.meta.opid.to_string().clone(),
-        };
+        let mut search_strategy =
+            SimilaritySingleEmbedding::<String>::from_filter(format!(
+                "operation_id = '{}'",
+                self.meta.opid
+            ));
+        search_strategy.with_top_k(10);
 
         let inject = InjectCodePrompt {
             template: include_str!(
@@ -257,16 +211,11 @@ impl InjectCode {
         };
 
         let pipeline =
-            query::Pipeline::from_search_strategy(search_strategy.clone())
+            query::Pipeline::from_search_strategy(search_strategy)
                 .then_transform_query(query_transformers::Embed::from_client(
                     llm.clone(),
                 ))
-                .then_transform_query(
-                    query_transformers::SparseEmbed::from_client(
-                        fastembed_sparse.clone(),
-                    ),
-                )
-                .then_retrieve(retriever)
+                .then_retrieve(lancedb.clone())
                 .then_transform_response(inject)
                 .then_answer(answers::Simple::from_client(llm.clone()));
 

@@ -16,7 +16,7 @@ use pulldown_cmark_to_cmark::cmark;
 use serde::Deserialize;
 use serde::Serialize;
 use swiftide::indexing::EmbeddedField;
-use swiftide::integrations::qdrant::Qdrant;
+use swiftide::integrations::lancedb::LanceDB;
 use swiftide::integrations::{self};
 use swiftide::query::answers;
 use swiftide::query::query_transformers;
@@ -28,7 +28,6 @@ use tera::Context;
 use super::CODE_COLLECTION;
 use super::clients::SupportedLLMClient;
 use super::clients::get_client;
-use crate::errors::ProxyError;
 use crate::report;
 use crate::report::types::Report;
 use crate::report::types::ReportFormat;
@@ -52,23 +51,13 @@ pub async fn analyze(
     let sp: Arc<dyn SimplePrompt> = llm.clone();
     let em: Arc<dyn EmbeddingModel> = llm.clone();
 
-    let qdrant: Qdrant = Qdrant::builder()
-        .batch_size(50)
-        .vector_size(embed_model_dim)
+    let lancedb: LanceDB = LanceDB::builder()
+        .uri(crate::agent::LANCEDB_URI)
+        .table_name(CODE_COLLECTION)
+        .batch_size(50usize)
+        .vector_size(embed_model_dim as i32)
         .with_vector(EmbeddedField::Combined)
-        .with_sparse_vector(EmbeddedField::Combined)
-        .collection_name(CODE_COLLECTION)
         .build()?;
-
-    let _ = qdrant.create_index_if_not_exists().await
-        .map_err(|e| {
-            tracing::error!("{}", e);
-            ProxyError::Other(
-                format!(
-                    "Failed to connect to a qdrant server. Make sure to properly configure your environment"
-                ).to_string(),
-            )
-        })?;
 
     // we carry a multiple shots analysis for better advices
     // each shot response is injected into the next shot
@@ -128,7 +117,7 @@ pub async fn analyze(
             .then_transform_query(query_transformers::Embed::from_client(
                 em.clone(),
             ))
-            .then_retrieve(qdrant.clone())
+            .then_retrieve(lancedb.clone())
             .then_answer(answers::Simple::from_client(sp.clone()));
 
         let resp = pipeline.query(q).await?;

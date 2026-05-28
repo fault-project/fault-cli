@@ -42,7 +42,7 @@ url = "2.5.7"
 oneshot = "0.1.11"
 tracing-appender = "0.2.3"
 hickory-resolver = "0.25"
-chrono = { version = "0.4.42", features = ["serde"] }
+chrono = { version = "0.4.41", features = ["serde"] }
 libc = "0.2.176"
 tracing-log = "0.2.0"
 reqwest = { version = "0.12.23", features = ["stream", "json", "gzip", "brotli", "zstd"] }
@@ -90,7 +90,7 @@ percent-encoding = { version = "2.3.2", optional = true }
 regex = { version = "1.11.3", default-features = false, features = ["std"], optional = true }
 
 # agent feature
-swiftide = { version = "0.31.2", optional = true, features = ["duckdb", "fastembed", "ollama", "openai", "qdrant", "tree-sitter", "open-router", "gemini"] }
+swiftide = { version = "0.31.2", optional = true, features = ["duckdb", "fastembed", "lancedb", "ollama", "openai", "tree-sitter", "open-router", "gemini"] }
 swiftide-macros = { version = "0.31.2", optional = true }
 swiftide-core = { version = "0.31.2", optional = true }
 swiftide-agents = { version = "0.31.2", optional = true, features = ["mcp"] }
@@ -112,7 +112,7 @@ tree-sitter-javascript = { version = "0.25.0", optional = true }
 tree-sitter-go = { version = "0.25.0", optional = true }
 tree-sitter-yaml = { version = "0.7.1", optional = true }
 schemars = { version = "1.0.4", optional = true }
-qdrant-client = { version = "1.15.0", optional = true }
+
 
 # discovery
 kube = { version = "2.0.1", features = ["jsonpatch"], optional = true }
@@ -200,8 +200,7 @@ agent = [
     "dep:tree-sitter-rust",
     "dep:tree-sitter-go",
     "dep:tree-sitter-python",
-    "dep:schemars",
-    "dep:qdrant-client"
+    "dep:schemars"
 ]
 openapi = [
     "dep:oas3",

@@ -14,7 +14,7 @@ use swiftide::indexing::transformers::ChunkCode;
 use swiftide::indexing::transformers::MetadataQACode;
 use swiftide::integrations::duckdb::Duckdb;
 use swiftide::integrations::fastembed::FastEmbed;
-use swiftide::integrations::qdrant::Qdrant;
+use swiftide::integrations::lancedb::LanceDB;
 use swiftide::integrations::treesitter::SupportedLanguages;
 use swiftide::query::{self};
 use swiftide_core::EmbeddingModel;
@@ -247,12 +247,12 @@ pub async fn index(
         .build()
         .unwrap();
 
-    let qdrant = Qdrant::builder()
-        .batch_size(64)
-        .vector_size(embed_model_dim)
+    let lancedb = LanceDB::builder()
+        .uri(crate::agent::LANCEDB_URI)
+        .table_name(CODE_COLLECTION)
+        .batch_size(64usize)
+        .vector_size(embed_model_dim as i32)
         .with_vector(EmbeddedField::Combined)
-        .with_sparse_vector(EmbeddedField::Combined)
-        .collection_name(CODE_COLLECTION)
         .build()?;
 
     let chunk_size = 2048;
@@ -277,7 +277,7 @@ pub async fn index(
     )?)
     .then_in_batch(Embed::new(em.clone()).with_batch_size(10))
     .then_in_batch(SparseEmbed::new(fastembed_sparse.clone()))
-    .then_store_with(qdrant.clone())
+    .then_store_with(lancedb.clone())
     .run()
     .await?;
 

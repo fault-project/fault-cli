@@ -8,3 +8,4 @@ pub(crate) mod suggestion;
 pub(crate) mod transformers;
 
 const CODE_COLLECTION: &str = "fault-code";
+const LANCEDB_URI: &str = ".fault/lancedb";
