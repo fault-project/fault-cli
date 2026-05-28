@@ -593,6 +593,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b34d609dfbaf33d6889b2b7106d3ca345eacad44200913df5ba02bfd31d2ba9"
 
 [[package]]
+name = "async-anthropic"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b55f84bfda9889ff5e5052bbe16e681e90142eeb28e4c61cf380b1fed104dc73"
+dependencies = [
+ "backoff",
+ "derive_builder 0.20.2",
+ "reqwest 0.12.28",
+ "reqwest-eventsource 0.6.0",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+]
+
+[[package]]
 name = "async-channel"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3633,7 +3652,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "fault-cli"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3749,7 +3768,7 @@ dependencies = [
 
 [[package]]
 name = "fault-ebpf-programs"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "aya-ebpf",
  "aya-log-ebpf",
@@ -9513,6 +9532,7 @@ checksum = "18e4a3ffa0cf37692165a6b3f5e6ba160da9ecc5a0bda977d96db2568e59e3e2"
 dependencies = [
  "anyhow",
  "arrow-array 55.2.0",
+ "async-anthropic",
  "async-openai 0.29.6",
  "async-trait",
  "chrono",

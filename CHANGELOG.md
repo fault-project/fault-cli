@@ -1,5 +1,14 @@
 # Changes
 
+## [0.18.0] - 2026-05-28
+
+### Added
+
+- Agent: Anthropic/Claude LLM client support — `--llm-client claude` (alias: `claude`, `anthropic`)
+  - Uses Claude's native Messages API via the `async-anthropic` crate
+  - Reads `ANTHROPIC_API_KEY` from the environment
+  - Embedding support via local FastEmbed (Anthropic doesn't provide native embeddings)
+
 ## [0.17.1] - 2026-02-27
 
 ## Fixed

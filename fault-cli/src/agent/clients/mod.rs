@@ -13,6 +13,7 @@ use swiftide_core::EmbeddingModel;
 use swiftide_core::LanguageModelWithBackOff;
 use swiftide_core::SimplePrompt;
 
+pub(crate) mod anthropic;
 pub(crate) mod gemini;
 pub(crate) mod ollama;
 pub(crate) mod openai;
@@ -23,6 +24,8 @@ pub(crate) mod openrouter;
 )]
 #[serde(rename_all = "lowercase")]
 pub enum SupportedLLMClient {
+    #[value(alias = "claude", alias = "anthropic")]
+    Anthropic,
     #[value(alias = "google", alias = "vertex", alias = "gemini-pro")]
     Gemini,
     #[value(alias = "openai", alias = "oai")]
@@ -49,6 +52,7 @@ impl FromStr for SupportedLLMClient {
 impl fmt::Display for SupportedLLMClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
+            SupportedLLMClient::Anthropic => "anthropic",
             SupportedLLMClient::Gemini => "gemini",
             SupportedLLMClient::OpenAI => "openai",
             SupportedLLMClient::OpenRouter => "openrouter",
@@ -86,6 +90,9 @@ pub fn get_client(
     embed_model: &str,
 ) -> Result<Arc<dyn LLM>> {
     match llm {
+        SupportedLLMClient::Anthropic => {
+            Ok(Arc::new(anthropic::get_client(prompt_model, embed_model)?))
+        }
         SupportedLLMClient::OpenAI => {
             Ok(Arc::new(openai::get_client(prompt_model, embed_model)?))
         }
@@ -107,6 +114,9 @@ pub fn get_llm_client(
     embed_model: &str,
 ) -> Result<Box<dyn ChatCompletion>> {
     match llm {
+        SupportedLLMClient::Anthropic => {
+            Ok(Box::new(anthropic::get_client(prompt_model, embed_model)?))
+        }
         SupportedLLMClient::OpenAI => {
             Ok(Box::new(openai::get_client(prompt_model, embed_model)?))
         }
