@@ -1,5 +1,19 @@
 # Changes
 
+## [0.19.0] - 2026-05-28
+
+### Changed
+
+- **Agent vector database**: replaced Qdrant (external server) with embedded LanceDB
+  - Removed `qdrant-client` crate dependency; no Docker or network server needed
+  - LanceDB stores data locally in `.fault/lancedb` — tables created implicitly on first write
+  - Sparse vector generation removed from retrieval (LanceDB uses Tantivy for FTS)
+  - Removed `create_index_if_not_exists()` calls from all query pipelines
+  - All batch sizes updated to `usize` literals to match LanceDB builder API
+  - Custom `OpIdRetriever` struct in `suggestion.rs` replaced with `SimilaritySingleEmbedding<String>` using LanceDB native filter syntax (`operation_id = '{opid}'`)
+  - `HybridSearch<Filter>` replaced with `SimilaritySingleEmbedding<String>` across all query pipelines
+  - All Qdrant builder calls replaced with LanceDB equivalents (`.uri()`, `.table_name()`)
+
 ## [0.18.0] - 2026-05-28
 
 ### Added
