@@ -9,6 +9,7 @@ on:
       - release
     paths: 
       - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/release.yaml'
 
 jobs:
