@@ -130,7 +130,7 @@ jobs:
             os: ubuntu-24.04
             artifact_name: fault
             asset_name: fault-cli
-            profile: prod-fast
+            profile: prod-small
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             artifact_name: fault.exe
