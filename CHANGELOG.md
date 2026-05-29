@@ -1,5 +1,15 @@
 # Changes
 
+## [0.19.1] - 2026-05-29
+
+### Fixed
+
+- **Kubernetes injection**: handle named target ports in Service resources —
+  `targetPort` can be a string (e.g. `"http"`) not only a number. Both
+  `inject::k8s::run` and `inject::k8s::scenario` now fall back to
+  `IntOrString::String` when the numeric parse fails, instead of panicking on
+  `unwrap()`.
+
 ## [0.19.0] - 2026-05-28
 
 ### Changed

@@ -231,9 +231,12 @@ fn build_backend_service(original: &Resource, backend_name: &str) -> Service {
                     .iter()
                     .map(|p| {
                         let port = p["port"].as_i64().unwrap() as i32;
-                        let target_port =
-                            p["targetPort"].as_i64().unwrap() as i32;
-                        let svc_port = IntOrString::Int(target_port);
+                        let svc_port = match p["targetPort"].as_i64() {
+                            Some(port) => IntOrString::Int(port as i32),
+                            None => IntOrString::String(
+                                p["targetPort"].as_str().unwrap().to_string(),
+                            ),
+                        };
                         k8s_openapi::api::core::v1::ServicePort {
                             protocol: Some("TCP".into()),
                             port,
