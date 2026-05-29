@@ -217,6 +217,7 @@ jobs:
         uses: svenstaro/upload-release-action@v2
         with:
           promote: false
+          overwrite: true
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: target/${{ matrix.target }}/${{ matrix.profile }}/${{ matrix.artifact_name }}
           asset_name: ${{ matrix.asset_name }}-${{needs.extract-version.outputs.version}}-${{ matrix.target }}
@@ -227,6 +228,7 @@ jobs:
         uses: svenstaro/upload-release-action@v2
         with:
           promote: false
+          overwrite: true
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: target/${{ matrix.target }}/${{ matrix.profile }}/${{ matrix.artifact_name }}
           asset_name: ${{ matrix.asset_name }}-${{needs.extract-version.outputs.version}}-${{ matrix.target }}.exe
@@ -358,6 +360,7 @@ jobs:
         uses: svenstaro/upload-release-action@v2
         with:
           promote: false
+          overwrite: true
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: target/${{ matrix.target }}/prod-fast/${{ matrix.artifact_name }}
           asset_name: fault-cli-ebpf-${{needs.extract-version.outputs.version}}-${{ matrix.target }}
@@ -368,6 +371,7 @@ jobs:
         uses: svenstaro/upload-release-action@v2
         with:
           promote: false
+          overwrite: true
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: target/bpfel-unknown-none/bpf/fault-ebpf
           asset_name: fault-ebpf-programs-${{needs.extract-version.outputs.version}}-${{ matrix.target }}
