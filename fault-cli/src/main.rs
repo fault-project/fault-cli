@@ -904,21 +904,87 @@ async fn main() -> Result<()> {
         Commands::Inject { inject } => match inject {
             cli::FaultInjectionCommands::Kubernetes(cfg) => {
                 let fault_settings = cfg.options.to_environment_variables();
-                let plt = &mut inject::k8s::KubernetesPlatform::new_proxy(
-                    &cfg.ns,
-                    &cfg.service.clone().unwrap_or("".to_string()),
-                    &cfg.image,
-                    &api_address,
-                    fault_settings,
-                )
-                .await?;
+                let env_overrides =
+                    inject::k8s::env_override::parse_env_overrides(
+                        &cfg.env_overrides,
+                    )?;
 
-                run_fault_injector_roundtrip(
-                    plt,
-                    cfg.service.clone(),
-                    &cfg.duration,
-                )
-                .await?;
+                if !env_overrides.is_empty() {
+                    // --env-override present → standalone outbound proxy mode.
+                    //
+                    // The real upstream is the current value of the first
+                    // overridden key, read from the cluster before we patch it.
+                    let first = &env_overrides[0];
+                    let upstream =
+                        inject::k8s::env_override::resolve_current_value(
+                            kube::Client::try_default().await?,
+                            &cfg.ns,
+                            first,
+                        )
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!(
+                            "Key '{}' not found in {}/{} — cannot determine \
+                             the real upstream for the standalone proxy.",
+                            first.key, first.kind.as_str(), first.name,
+                        ))?;
+
+                    // Proxy name: --name if given, otherwise
+                    // "fault-proxy-<suffix>"
+                    let proxy_name = cfg.name.clone().unwrap_or_else(|| {
+                        use rand::Rng;
+                        let suffix: String = rand::rng()
+                            .sample_iter(rand::distr::Alphanumeric)
+                            .take(6)
+                            .map(|c| (c as char).to_lowercase().next().unwrap())
+                            .collect();
+                        format!("fault-proxy-{}", suffix)
+                    });
+
+                    // Port: from the new value's "host:port", else 3180
+                    let proxy_port: i32 = first
+                        .value
+                        .rsplit_once(':')
+                        .and_then(|(_, p)| p.parse().ok())
+                        .unwrap_or(3180);
+
+                    let plt =
+                        &mut inject::k8s::KubernetesPlatform::new_standalone(
+                            &cfg.ns,
+                            &proxy_name,
+                            &upstream,
+                            proxy_port,
+                            &cfg.image,
+                            &api_address,
+                            fault_settings,
+                            env_overrides,
+                        )
+                        .await?;
+
+                    run_standalone_injector_roundtrip(
+                        plt,
+                        &proxy_name,
+                        &cfg.duration,
+                    )
+                    .await?;
+                } else {
+                    // No --env-override → service-based inbound proxy mode.
+                    let plt = &mut inject::k8s::KubernetesPlatform::new_proxy(
+                        &cfg.ns,
+                        &cfg.service.clone().unwrap_or_default(),
+                        &cfg.image,
+                        &api_address,
+                        fault_settings,
+                        env_overrides,
+                    )
+                    .await?;
+
+                    run_fault_injector_roundtrip(
+                        plt,
+                        cfg.service.clone(),
+                        &cfg.duration,
+                    )
+                    .await?;
+                }
             }
             cli::FaultInjectionCommands::Gcp(cfg) => {
                 let fault_settings = cfg.options.to_environment_variables();
@@ -1061,6 +1127,53 @@ pub async fn run_fault_injector_roundtrip<P: Platform>(
     Ok(())
 }
 
+/// Like `run_fault_injector_roundtrip` but for standalone outbound proxy mode.
+/// Skips service discovery and selection — the proxy name is already known.
+#[cfg(feature = "discovery")]
+async fn run_standalone_injector_roundtrip<P: Platform>(
+    plt: &mut P,
+    proxy_name: &str,
+    duration: &Option<String>,
+) -> Result<()> {
+    plt.inject().await?;
+    println!("  Deploying fault...");
+    println!(
+        "   Standalone proxy '{}' injected 🚀.\n   \
+         Workloads pointing at it will now have their outbound traffic faulted.",
+        proxy_name.yellow()
+    );
+
+    match duration {
+        Some(d) => match parse_duration::parse(d.as_str()) {
+            Ok(total) => {
+                println!("  Injecting fault for {}", d);
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {
+                        tracing::info!("Shutdown signal received. Initiating shutdown.");
+                    }
+                    _ = sleep(total) => {
+                        tracing::info!("Time's up! Shutting down now.");
+                    }
+                }
+            }
+            Err(_) => anyhow::bail!("failed to parse the duration flag"),
+        },
+        None => {
+            let _ = Confirm::new(&format!(
+                "Press '{}' to finish and rollback",
+                "y".to_string().green()
+            ))
+            .prompt();
+        }
+    }
+
+    println!("  Rolling back fault...");
+    plt.rollback().await?;
+    println!("  Rolled back.");
+
+    Ok(())
+}
+
 #[cfg(feature = "scenario")]
 async fn run_scenario_command(
     api_address: String,
@@ -1145,7 +1258,8 @@ async fn run_scenario_command(
                                         &service,
                                         &image.clone().unwrap_or("ghcr.io/fault-project/fault-cli:latest".to_string()),
                                         &api_address,
-                                        fault_settings
+                                        fault_settings,
+                                        Vec::new(),
                                     ).await?;
                                     plt.inject().await?;
                                     plt.wait_ready().await?;

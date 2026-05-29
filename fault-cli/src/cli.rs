@@ -1383,11 +1383,11 @@ pub struct FaultInjectionKubernetesConfig {
     )]
     pub ns: String,
 
-    /// Service to inject fault into
+    /// Service to inject fault into (inbound proxy mode).
     #[arg(
         short,
         long,
-        help = "Service to inject fault into.",
+        help = "Service to inject fault into (inbound proxy mode).",
         env = "FAULT_INJECTION_K8S_SERVICE"
     )]
     pub service: Option<String>,
@@ -1410,6 +1410,36 @@ pub struct FaultInjectionKubernetesConfig {
         value_parser
     )]
     pub duration: Option<String>,
+
+    /// Name for the injected proxy resources. Used in standalone outbound
+    /// mode (when --env-override is set without --service). If omitted a
+    /// short random suffix is generated. Has no effect in inbound mode where
+    /// the name is derived from the target Service.
+    #[arg(
+        long,
+        help = "Name for the proxy resources (standalone mode). Defaults to a random suffix.",
+        env = "FAULT_INJECTION_K8S_NAME"
+    )]
+    pub name: Option<String>,
+
+    /// Override a value in a specific workload or ConfigMap.
+    /// Format: kind/name:KEY=VALUE
+    /// Supported kinds: deployment, statefulset, configmap (aliases: deploy,
+    /// sts, cm) Examples:
+    ///   --env-override deployment/my-api:DB_HOST=proxy-svc:5432
+    ///   --env-override configmap/my-app-config:DB_HOST=proxy-svc:5432
+    /// Can be repeated. On rollback the original value is restored.
+    /// For deployment/statefulset a rolling restart is triggered
+    /// automatically. For configmap only the data key is patched; rollout
+    /// is left to the user.
+    #[arg(
+        long = "env-override",
+        help = "Override a value in kind/name:KEY=VALUE format. Repeatable.",
+        env = "FAULT_INJECTION_K8S_ENV_OVERRIDES",
+        value_delimiter = ',',
+        num_args = 0..
+    )]
+    pub env_overrides: Vec<String>,
 
     #[command(flatten)]
     pub options: Box<FaultInjectionCommandOptions>,

@@ -16,10 +16,32 @@ pub enum ResourcePlatform {
     Gcp,
 }
 
+/// Records the original values for a single patched resource so they can be
+/// restored on rollback.
+///
+/// - For Deployment / StatefulSet: `container_name` is `Some(name)`.
+/// - For ConfigMap: `container_name` is `None` (ConfigMaps have no containers).
+///   `original_values` maps ConfigMap data keys to their previous values.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct EnvVarRollbackEntry {
+    /// "Deployment", "StatefulSet", or "ConfigMap"
+    pub workload_kind: String,
+    pub workload_name: String,
+    /// Present for Deployment/StatefulSet entries; absent for ConfigMap
+    /// entries.
+    pub container_name: Option<String>,
+    /// key -> original value (None means the key didn't exist — delete on
+    /// rollback).
+    pub original_values: BTreeMap<String, Option<String>>,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct K8sSpecSnapshot {
     pub selector: BTreeMap<String, String>,
     pub ports: Vec<Value>,
+    /// Populated only when --env-override was used.
+    #[serde(default)]
+    pub env_var_rollback: Vec<EnvVarRollbackEntry>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]

@@ -210,14 +210,13 @@ impl InjectCode {
             source_dir: self.source_dir.to_string()
         };
 
-        let pipeline =
-            query::Pipeline::from_search_strategy(search_strategy)
-                .then_transform_query(query_transformers::Embed::from_client(
-                    llm.clone(),
-                ))
-                .then_retrieve(lancedb.clone())
-                .then_transform_response(inject)
-                .then_answer(answers::Simple::from_client(llm.clone()));
+        let pipeline = query::Pipeline::from_search_strategy(search_strategy)
+            .then_transform_query(query_transformers::Embed::from_client(
+                llm.clone(),
+            ))
+            .then_retrieve(lancedb.clone())
+            .then_transform_response(inject)
+            .then_answer(answers::Simple::from_client(llm.clone()));
 
         let mut ctx = Context::new();
         ctx.insert("source_lang", &self.source_lang);

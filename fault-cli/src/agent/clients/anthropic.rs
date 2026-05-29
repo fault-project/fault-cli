@@ -2,11 +2,13 @@ use anyhow::Result;
 use async_trait::async_trait;
 use swiftide::integrations;
 use swiftide::integrations::fastembed::FastEmbed;
+use swiftide_core::ChatCompletion;
+use swiftide_core::ChatCompletionStream;
+use swiftide_core::EmbeddingModel;
+use swiftide_core::Embeddings;
 use swiftide_core::LanguageModelWithBackOff;
+use swiftide_core::SimplePrompt;
 use swiftide_core::chat_completion::errors::LanguageModelError;
-use swiftide_core::{
-    ChatCompletion, ChatCompletionStream, EmbeddingModel, Embeddings, SimplePrompt,
-};
 
 #[derive(Debug, Clone)]
 pub struct AnthropicClient {
@@ -28,7 +30,10 @@ impl ChatCompletion for AnthropicClient {
     async fn complete(
         &self,
         request: &swiftide_core::chat_completion::ChatCompletionRequest,
-    ) -> Result<swiftide_core::chat_completion::ChatCompletionResponse, LanguageModelError> {
+    ) -> Result<
+        swiftide_core::chat_completion::ChatCompletionResponse,
+        LanguageModelError,
+    > {
         self.inner.complete(request).await
     }
 
@@ -81,7 +86,8 @@ pub fn get_client(
         .default_prompt_model(prompt_model)
         .build()?;
 
-    let llm = LanguageModelWithBackOff::new(anthropic_client, Default::default());
+    let llm =
+        LanguageModelWithBackOff::new(anthropic_client, Default::default());
 
     let embedder = FastEmbed::builder().batch_size(10).build()?;
 

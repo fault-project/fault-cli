@@ -102,8 +102,11 @@ pub async fn inject_fault_scenario(
         .patch(orig_name, &PatchParams::default(), &Patch::Json::<()>(patch))
         .await?;
 
-    let snapshot =
-        K8sSpecSnapshot { selector: original_selector, ports: Vec::new() };
+    let snapshot = K8sSpecSnapshot {
+        selector: original_selector,
+        ports: Vec::new(),
+        env_var_rollback: Vec::new(),
+    };
 
     Ok(snapshot)
 }

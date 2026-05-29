@@ -1,5 +1,42 @@
 # Changes
 
+## [0.20.0] - 2026-05-29
+
+### Added
+
+- **Kubernetes injection: outbound (standalone) proxy mode** — inject faults on
+  traffic a pod sends *to* a downstream dependency (e.g. a cloud DB), not just
+  on inbound traffic arriving at the pod.
+
+  Triggered by passing one or more `--env-override` flags without `--service`.
+  A standalone fault proxy Job + ClusterIP Service is created; env vars in the
+  named ConfigMaps, Deployments, or StatefulSets are patched to redirect the
+  downstream address through the proxy. On rollback, original values are
+  restored and the proxy resources are deleted.
+
+  ```
+  fault inject kubernetes \
+    --env-override configmap/my-app-config:DB_HOST=fault-proxy-db:5432 \
+    --with-latency --latency-mean 200
+  ```
+
+- **`--env-override kind/name:KEY=VALUE`** — new repeatable flag for the
+  Kubernetes injector. Patches a specific key in a ConfigMap, Deployment, or
+  StatefulSet (aliases: `cm`, `deploy`, `sts`). For Deployment/StatefulSet a
+  rolling restart annotation is added; for ConfigMap only the data key is
+  patched (rollout is left to the operator). Original values are stored in the
+  rollback snapshot and restored automatically.
+
+- **`--name`** — optional name for the standalone proxy resources. When omitted
+  a short random suffix is generated (`fault-proxy-<6 chars>`). Useful in
+  scripts where the proxy address must be known ahead of time and embedded in
+  the `--env-override` value.
+
+### Fixed
+
+- `BandwidthUnit::from_str`: match arms used mixed case (`"Bps"`, `"KBps"`)
+  after `.to_lowercase()`, making them unreachable. Arms are now all lowercase.
+
 ## [0.19.1] - 2026-05-29
 
 ### Fixed
