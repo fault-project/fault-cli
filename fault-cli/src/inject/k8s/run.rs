@@ -131,6 +131,7 @@ fn build_proxy_job(
     api_adress: String,
     proxy_port: i32,
     proxy_arg: String,
+    http_mode: bool,
 ) -> Job {
     let readiness_probe = Probe {
         tcp_socket: Some(TCPSocketAction {
@@ -146,24 +147,41 @@ fn build_proxy_job(
         ..Default::default()
     };
 
+    // In HTTP mode (i.e. --with-http-response is set) the fault proxy must
+    // run as an HTTP CONNECT proxy so it can inspect and rewrite responses at
+    // L7.  The HTTP CONNECT proxy listens on proxy_port (3180) by default, so
+    // we simply omit --disable-http-proxy and --proxy.
+    //
+    // In TCP mode (the default) we disable the HTTP CONNECT proxy and use the
+    // TCP proxy instead, which is transparent but cannot manipulate L7.
+    let args = if http_mode {
+        vec![
+            "--log-stdout".into(),
+            "--log-level".into(),
+            "debug".into(),
+            "run".into(),
+            "--no-ui".into(),
+        ]
+    } else {
+        vec![
+            "--log-stdout".into(),
+            "--log-level".into(),
+            "debug".into(),
+            "run".into(),
+            "--no-ui".into(),
+            "--disable-http-proxy".into(),
+            "--proxy".into(),
+            proxy_arg,
+        ]
+    };
+
     // fault proxy container
     let container = Container {
         name: name.into(),
         image: Some(image.into()),
         image_pull_policy: Some("Always".into()),
         tty: Some(false),
-        args: Some(vec![
-            "--log-stdout".into(),
-            "--log-level".into(),
-            "debug".into(),
-            //"--api-address".into(),
-            //api_adress,
-            "run".into(),
-            "--no-ui".into(),
-            "--disable-http-proxy".into(),
-            "--proxy".into(),
-            proxy_arg,
-        ]),
+        args: Some(args),
         ports: Some(vec![ContainerPort {
             container_port: proxy_port,
             name: Some("proxy".into()),
@@ -230,6 +248,15 @@ fn build_proxy_job(
     }
 }
 
+/// Returns true when the fault settings include an HTTP error fault, meaning
+/// the proxy must run in HTTP CONNECT mode rather than TCP mode.
+fn is_http_fault_mode(fault_settings: &BTreeMap<String, String>) -> bool {
+    fault_settings
+        .get("FAULT_WITH_HTTP_FAULT")
+        .map(|v| v == "true")
+        .unwrap_or(false)
+}
+
 pub async fn inject_fault_proxy(
     client: Client,
     svc: &Resource,
@@ -253,6 +280,8 @@ pub async fn inject_fault_proxy(
     // Prepare labels & config for the proxy
     let mut labels = BTreeMap::new();
     labels.insert("app".into(), proxy_name.clone());
+
+    let http_mode = is_http_fault_mode(fault_settings);
 
     let mut cm_data = BTreeMap::new();
     cm_data.append(fault_settings);
@@ -279,6 +308,7 @@ pub async fn inject_fault_proxy(
         api_address,
         proxy_port,
         proxy_arg,
+        http_mode,
     );
 
     // Create the proxy
@@ -468,6 +498,9 @@ pub async fn inject_fault_proxy_standalone(
     let sa = build_service_account(ns, proxy_name, &labels);
 
     // proxy_arg: "<listen_port>=<real_upstream>"
+    // HTTP mode is not supported in standalone outbound mode — the HTTP
+    // CONNECT proxy only works when the pod explicitly sends requests
+    // through it (HTTP_PROXY env var), which is not set up here.
     let proxy_arg = format!("{}={}", proxy_port, upstream);
     let proxy_job = build_proxy_job(
         ns,
@@ -478,6 +511,7 @@ pub async fn inject_fault_proxy_standalone(
         String::new(),
         proxy_port,
         proxy_arg,
+        false,
     );
 
     // Frontend ClusterIP Service — pods reach the proxy through this

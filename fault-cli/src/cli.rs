@@ -856,7 +856,12 @@ pub struct HTTPResponseOptions {
         name = "http_response_enabled",
         long = "with-http-response",
         default_value_t = false,
-        help = "Enable HTTP response fault.",
+        help = "Enable HTTP response fault. \
+                Requires L7 visibility: works with 'fault run' and \
+                'fault inject kubernetes --service' (inbound proxy mode). \
+                Not supported in standalone outbound mode (--env-override \
+                without --service) because the TCP proxy cannot inspect \
+                HTTP responses.",
         env = "FAULT_WITH_HTTP_FAULT"
     )]
     pub enabled: bool,

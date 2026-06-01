@@ -1,5 +1,20 @@
 # Changes
 
+## [0.20.4] - 2026-06-01
+
+### Changed
+
+- **`fault inject kubernetes`: HTTP error fault now forces HTTP proxy mode** —
+  when `--with-http-response` is set, the injected proxy Job runs as an HTTP
+  CONNECT proxy (omitting `--disable-http-proxy` and `--proxy`). This is the
+  only mode that can inspect and rewrite HTTP responses at L7. All other faults
+  continue to use TCP proxy mode (transparent, L4 only).
+
+- **`--with-http-response` help text** clarifies that HTTP error injection
+  requires inbound proxy mode (`--service`). Standalone outbound mode
+  (`--env-override` without `--service`) cannot use HTTP error faults because
+  the TCP proxy has no L7 visibility.
+
 ## [0.20.3] - 2026-06-01
 
 ### Fixed
