@@ -911,11 +911,6 @@ async fn main() -> Result<()> {
 
                 if !env_overrides.is_empty() {
                     // --env-override present → standalone outbound proxy mode.
-                    //
-                    // Resolve the real upstream host:port from the current
-                    // values of the overridden keys before we patch them.
-                    // Handles split host/port keys by reading both and
-                    // combining.
                     let upstream = inject::k8s::env_override::resolve_upstream(
                         kube::Client::try_default().await?,
                         &cfg.ns,
@@ -923,8 +918,6 @@ async fn main() -> Result<()> {
                     )
                     .await?;
 
-                    // Proxy name: --name if given, otherwise
-                    // "fault-proxy-<suffix>"
                     let proxy_name = cfg.name.clone().unwrap_or_else(|| {
                         use rand::Rng;
                         let suffix: String = rand::rng()
@@ -935,8 +928,17 @@ async fn main() -> Result<()> {
                         format!("fault-proxy-{}", suffix)
                     });
 
-                    let plt =
-                        &mut inject::k8s::KubernetesPlatform::new_standalone(
+                    if cfg.dry_run {
+                        print_standalone_plan(
+                            &cfg.ns,
+                            &proxy_name,
+                            &upstream,
+                            &env_overrides,
+                            &fault_settings,
+                            &cfg.image,
+                        );
+                    } else {
+                        let plt = &mut inject::k8s::KubernetesPlatform::new_standalone(
                             &cfg.ns,
                             &proxy_name,
                             &upstream,
@@ -948,30 +950,56 @@ async fn main() -> Result<()> {
                         )
                         .await?;
 
-                    run_standalone_injector_roundtrip(
-                        plt,
-                        &proxy_name,
-                        &cfg.duration,
-                    )
-                    .await?;
+                        run_standalone_injector_roundtrip(
+                            plt,
+                            &proxy_name,
+                            &cfg.duration,
+                        )
+                        .await?;
+                    }
                 } else {
                     // No --env-override → service-based inbound proxy mode.
-                    let plt = &mut inject::k8s::KubernetesPlatform::new_proxy(
-                        &cfg.ns,
-                        &cfg.service.clone().unwrap_or_default(),
-                        &cfg.image,
-                        &api_address,
-                        fault_settings,
-                        env_overrides,
-                    )
-                    .await?;
+                    if cfg.dry_run {
+                        // We still need to discover services to resolve the
+                        // target and show a meaningful plan.
+                        let plt =
+                            &mut inject::k8s::KubernetesPlatform::new_proxy(
+                                &cfg.ns,
+                                &cfg.service.clone().unwrap_or_default(),
+                                &cfg.image,
+                                &api_address,
+                                fault_settings,
+                                env_overrides,
+                            )
+                            .await?;
 
-                    run_fault_injector_roundtrip(
-                        plt,
-                        cfg.service.clone(),
-                        &cfg.duration,
-                    )
-                    .await?;
+                        run_fault_injector_roundtrip(
+                            plt,
+                            cfg.service.clone(),
+                            &cfg.duration,
+                            true,
+                        )
+                        .await?;
+                    } else {
+                        let plt =
+                            &mut inject::k8s::KubernetesPlatform::new_proxy(
+                                &cfg.ns,
+                                &cfg.service.clone().unwrap_or_default(),
+                                &cfg.image,
+                                &api_address,
+                                fault_settings,
+                                env_overrides,
+                            )
+                            .await?;
+
+                        run_fault_injector_roundtrip(
+                            plt,
+                            cfg.service.clone(),
+                            &cfg.duration,
+                            false,
+                        )
+                        .await?;
+                    }
                 }
             }
             cli::FaultInjectionCommands::Gcp(cfg) => {
@@ -990,6 +1018,7 @@ async fn main() -> Result<()> {
                     plt,
                     cfg.service.clone(),
                     &cfg.duration,
+                    false,
                 )
                 .await?;
             }
@@ -1008,6 +1037,7 @@ async fn main() -> Result<()> {
                     plt,
                     cfg.service_name.clone(),
                     &cfg.duration,
+                    false,
                 )
                 .await?;
             }
@@ -1055,6 +1085,106 @@ fn is_stealth(cli: &RunCommandOptions) -> bool {
 #[cfg(not(target_os = "linux"))]
 fn is_stealth(cli: &RunCommandOptions) -> bool {
     false
+}
+
+/// Print a dry-run plan for inbound proxy mode (--service).
+#[cfg(feature = "discovery")]
+fn print_inbound_plan(
+    svc: &inject::ServiceResource,
+    raw: &discovery::types::Resource,
+) {
+    println!("\n{}", "Dry-run — no changes will be made.".yellow().bold());
+    println!("\n{}", "Target service:".bold());
+    println!("  name:      {}", svc.name.as_str().cyan());
+    println!("  namespace: {}", raw.meta.ns.as_str().cyan());
+
+    let spec = &raw.content["spec"];
+    if let Some(sel) = spec["selector"].as_object() {
+        println!("  current selector:");
+        for (k, v) in sel {
+            println!("    {}={}", k, v.as_str().unwrap_or("?"));
+        }
+    }
+    if let Some(ports) = spec["ports"].as_array() {
+        println!("  current ports:");
+        for p in ports {
+            println!(
+                "    {} → targetPort {}",
+                p["port"].as_i64().unwrap_or(0),
+                p["targetPort"]
+            );
+        }
+    }
+
+    let proxy_name = format!("{}-proxy", svc.name);
+    let backend_name = format!("{}-backend", svc.name);
+    println!("\n{}", "Resources that would be created:".bold());
+    println!("  ServiceAccount  {}", proxy_name.as_str().cyan());
+    println!("  ConfigMap       {}-config", proxy_name.as_str().cyan());
+    println!("  Job             {}", proxy_name.as_str().cyan());
+    println!(
+        "  Service         {} (backend, original pods)",
+        backend_name.as_str().cyan()
+    );
+
+    println!("\n{}", "Service patch that would be applied:".bold());
+    println!("  selector: <current> → app={}", proxy_name.as_str().cyan());
+    println!("  targetPort: <current> → 3180 (proxy)");
+
+    println!("\n{} Use without --dry-run to apply.\n", "→".green());
+}
+
+/// Print a dry-run plan for standalone outbound proxy mode (--env-override).
+#[cfg(feature = "discovery")]
+fn print_standalone_plan(
+    ns: &str,
+    proxy_name: &str,
+    upstream: &str,
+    env_overrides: &[inject::k8s::env_override::EnvOverride],
+    fault_settings: &std::collections::BTreeMap<String, String>,
+    image: &str,
+) {
+    use inject::k8s::env_override::EnvOverrideValue;
+
+    println!("\n{}", "Dry-run — no changes will be made.".yellow().bold());
+    println!("\n{}", "Standalone proxy that would be created:".bold());
+    println!("  name:      {}", proxy_name.cyan());
+    println!("  namespace: {}", ns.cyan());
+    println!("  image:     {}", image);
+    println!("  upstream:  {}", upstream.cyan());
+    println!("  listen:    3180");
+
+    println!("\n{}", "Resources that would be created:".bold());
+    println!("  ServiceAccount  {}", proxy_name.cyan());
+    println!("  ConfigMap       {}-config", proxy_name.cyan());
+    println!("  Job             {}", proxy_name.cyan());
+    println!("  Service         {} (ClusterIP, port 3180)", proxy_name.cyan());
+
+    println!("\n{}", "Env var overrides that would be patched:".bold());
+    for ov in env_overrides {
+        let resolved = match &ov.value {
+            EnvOverrideValue::Literal(v) => v.clone(),
+            EnvOverrideValue::Template(t) => {
+                t.replace("{host}", proxy_name).replace("{port}", "3180")
+            }
+        };
+        println!(
+            "  {}/{}: {} → {}",
+            ov.kind.as_str().dim(),
+            ov.name.as_str().dim(),
+            ov.key.as_str().cyan(),
+            resolved.as_str().green()
+        );
+    }
+
+    if !fault_settings.is_empty() {
+        println!("\n{}", "Active fault settings:".bold());
+        for (k, v) in fault_settings {
+            println!("  {}={}", k.as_str().dim(), v);
+        }
+    }
+
+    println!("\n{} Use without --dry-run to apply.\n", "→".green());
 }
 
 /// Wait for either a duration to elapse, a Ctrl-C signal, or the user to
@@ -1109,6 +1239,7 @@ pub async fn run_fault_injector_roundtrip<P: Platform>(
     plt: &mut P,
     service: Option<String>,
     duration: &Option<String>,
+    dry_run: bool,
 ) -> Result<()> {
     let svcs = plt.discover().await?;
     let names: Vec<String> = svcs.iter().map(|s| s.name.clone()).collect();
@@ -1121,6 +1252,11 @@ pub async fn run_fault_injector_roundtrip<P: Platform>(
     let _ = plt.set_service(&sel);
     let svc = plt.get_service().await?;
 
+    if dry_run {
+        print_inbound_plan(&svc, plt.get_concrete_service());
+        return Ok(());
+    }
+
     plt.inject().await?;
     println!("  Deploying fault...");
     println!(
@@ -1131,7 +1267,18 @@ pub async fn run_fault_injector_roundtrip<P: Platform>(
     wait_for_rollback(duration).await?;
 
     println!("  Rolling back fault...");
-    plt.rollback().await?;
+    if let Err(e) = plt.rollback().await {
+        eprintln!(
+            "\n{} Rollback failed: {}\n\
+             The service selector and/or proxy resources may still be active.\n\
+             To recover manually, check for leftover resources named '*-proxy' \
+             and '*-backend' in the target namespace and restore the original \
+             Service selector.",
+            "ERROR:".red().bold(),
+            e
+        );
+        return Err(e);
+    }
     println!("  Rolled back.");
 
     Ok(())
@@ -1148,7 +1295,7 @@ async fn run_standalone_injector_roundtrip<P: Platform>(
     plt.inject().await?;
     println!("  Deploying fault...");
     println!(
-        "   Standalone proxy '{}' injected 🚀.\n   \
+        "   Standalone proxy '{}' injected.\n   \
          Workloads pointing at it will now have their outbound traffic faulted.",
         proxy_name.yellow()
     );
@@ -1156,7 +1303,19 @@ async fn run_standalone_injector_roundtrip<P: Platform>(
     wait_for_rollback(duration).await?;
 
     println!("  Rolling back fault...");
-    plt.rollback().await?;
+    if let Err(e) = plt.rollback().await {
+        eprintln!(
+            "\n{} Rollback failed: {}\n\
+             The proxy resources may still be active in the cluster.\n\
+             To recover manually, delete the Job, Service, ConfigMap and \
+             ServiceAccount named '{}' in the target namespace, and restore \
+             any patched env vars.",
+            "ERROR:".red().bold(),
+            e,
+            proxy_name
+        );
+        return Err(e);
+    }
     println!("  Rolled back.");
 
     Ok(())

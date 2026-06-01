@@ -1416,6 +1416,15 @@ pub struct FaultInjectionKubernetesConfig {
     )]
     pub duration: Option<String>,
 
+    /// Print what would be done without making any changes to the cluster.
+    #[arg(
+        long,
+        help = "Print the injection plan without applying any changes.",
+        env = "FAULT_INJECTION_K8S_DRY_RUN",
+        default_value_t = false
+    )]
+    pub dry_run: bool,
+
     /// Name for the injected proxy resources. Used in standalone outbound
     /// mode (when --env-override is set without --service). If omitted a
     /// short random suffix is generated. Has no effect in inbound mode where

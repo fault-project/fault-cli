@@ -1,5 +1,27 @@
 # Changes
 
+## [0.20.6] - 2026-06-01
+
+### Added
+
+- **`--dry-run` for `fault inject kubernetes`** — prints the full injection
+  plan without making any changes to the cluster.
+
+  Inbound mode (`--service`) shows: target service name/namespace, current
+  selector and ports, resources that would be created (ServiceAccount,
+  ConfigMap, Job, backend Service), and the Service patch that would be
+  applied.
+
+  Standalone outbound mode (`--env-override`) shows: proxy name/namespace/
+  upstream/listen port, resources that would be created, each env var key
+  with its resolved value (`{host}` and `{port}` substituted), and active
+  fault settings.
+
+- **Clear rollback failure output** — if `plt.rollback()` fails, a prominent
+  `ERROR:` message is printed to stderr with the error, the likely leftover
+  resources to clean up manually, and guidance on restoring the original
+  Service selector. The process exits with a non-zero status.
+
 ## [0.20.5] - 2026-06-01
 
 ### Fixed
