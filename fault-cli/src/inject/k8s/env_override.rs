@@ -170,25 +170,99 @@ pub fn parse_env_overrides(raw: &[String]) -> Result<Vec<EnvOverride>> {
 // Upstream resolution
 // ---------------------------------------------------------------------------
 
-/// Read the **current** value of the first override's key from the named
-/// resource.  This is used in standalone proxy mode to discover the real
-/// upstream address (e.g. the current `DB_HOST` value) before we overwrite it.
+/// Resolve the real upstream address (`host:port`) from the current values of
+/// the overridden keys, before we overwrite them.
 ///
-/// Returns `None` if the key doesn't exist or the resource has no relevant
-/// data (e.g. a Deployment container that doesn't carry the key at all).
-pub async fn resolve_current_value(
+/// Strategy:
+/// - If any override template contains `{host}`, read that key's current value
+///   as the upstream host.
+/// - If any override template contains `{port}`, read that key's current value
+///   as the upstream port.
+/// - Combine as `host:port`.
+///
+/// If no template contains `{port}` (e.g. only `{host}` is used, or it's a
+/// full-address template like `DATABASE_URL={host}:{port}`), we try to extract
+/// the port from the full-address key's current value, or leave it out and let
+/// the proxy default.
+///
+/// Falls back to reading the first override's current value verbatim when no
+/// templates are present (literal overrides — the user is responsible for
+/// knowing the upstream).
+pub async fn resolve_upstream(
     client: Client,
+    ns: &str,
+    overrides: &[EnvOverride],
+) -> Result<String> {
+    // Find the override whose template carries {host} and the one with {port}
+    let host_ov = overrides.iter().find(|ov| match &ov.value {
+        EnvOverrideValue::Template(t) => t.contains("{host}"),
+        _ => false,
+    });
+    let port_ov = overrides.iter().find(|ov| match &ov.value {
+        EnvOverrideValue::Template(t) => t.contains("{port}"),
+        _ => false,
+    });
+
+    match (host_ov, port_ov) {
+        (Some(h), Some(p)) => {
+            // Separate host and port keys — read both and combine.
+            let host = read_current_value(&client, ns, h)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Key '{}' not found in {}/{} — cannot determine upstream host.",
+                    h.key, h.kind.as_str(), h.name
+                ))?;
+            let port = read_current_value(&client, ns, p)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Key '{}' not found in {}/{} — cannot determine upstream port.",
+                    p.key, p.kind.as_str(), p.name
+                ))?;
+            Ok(format!("{}:{}", host.trim(), port.trim()))
+        }
+        (Some(h), None) => {
+            // Only {host} — current value may already be "host:port" or
+            // just a hostname; use it as-is.
+            let val = read_current_value(&client, ns, h)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Key '{}' not found in {}/{} — cannot determine upstream.",
+                    h.key, h.kind.as_str(), h.name
+                ))?;
+            Ok(val.trim().to_string())
+        }
+        _ => {
+            // No templates, or templates without {host}/{port} (e.g. literal
+            // full-URL override).  Read the first override's current value
+            // verbatim — the caller must ensure it is a usable address.
+            let first = overrides.first().ok_or_else(|| {
+                anyhow::anyhow!("--env-override list is empty")
+            })?;
+            let val = read_current_value(&client, ns, first)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Key '{}' not found in {}/{} — cannot determine upstream.",
+                    first.key, first.kind.as_str(), first.name
+                ))?;
+            Ok(val.trim().to_string())
+        }
+    }
+}
+
+/// Read the current value of a single override key from the cluster.
+async fn read_current_value(
+    client: &Client,
     ns: &str,
     ov: &EnvOverride,
 ) -> Result<Option<String>> {
     match &ov.kind {
         WorkloadKind::ConfigMap => {
-            let api: Api<ConfigMap> = Api::namespaced(client, ns);
+            let api: Api<ConfigMap> = Api::namespaced(client.clone(), ns);
             let cm = api.get(&ov.name).await?;
             Ok(cm.data.and_then(|d| d.get(&ov.key).cloned()))
         }
         WorkloadKind::Deployment => {
-            let api: Api<Deployment> = Api::namespaced(client, ns);
+            let api: Api<Deployment> = Api::namespaced(client.clone(), ns);
             let d = api.get(&ov.name).await?;
             let containers = d
                 .spec
@@ -210,7 +284,7 @@ pub async fn resolve_current_value(
             Ok(None)
         }
         WorkloadKind::StatefulSet => {
-            let api: Api<StatefulSet> = Api::namespaced(client, ns);
+            let api: Api<StatefulSet> = Api::namespaced(client.clone(), ns);
             let ss = api.get(&ov.name).await?;
             let containers = ss
                 .spec

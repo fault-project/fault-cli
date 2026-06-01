@@ -912,21 +912,16 @@ async fn main() -> Result<()> {
                 if !env_overrides.is_empty() {
                     // --env-override present → standalone outbound proxy mode.
                     //
-                    // The real upstream is the current value of the first
-                    // overridden key, read from the cluster before we patch it.
-                    let first = &env_overrides[0];
-                    let upstream =
-                        inject::k8s::env_override::resolve_current_value(
-                            kube::Client::try_default().await?,
-                            &cfg.ns,
-                            first,
-                        )
-                        .await?
-                        .ok_or_else(|| anyhow::anyhow!(
-                            "Key '{}' not found in {}/{} — cannot determine \
-                             the real upstream for the standalone proxy.",
-                            first.key, first.kind.as_str(), first.name,
-                        ))?;
+                    // Resolve the real upstream host:port from the current
+                    // values of the overridden keys before we patch them.
+                    // Handles split host/port keys by reading both and
+                    // combining.
+                    let upstream = inject::k8s::env_override::resolve_upstream(
+                        kube::Client::try_default().await?,
+                        &cfg.ns,
+                        &env_overrides,
+                    )
+                    .await?;
 
                     // Proxy name: --name if given, otherwise
                     // "fault-proxy-<suffix>"
