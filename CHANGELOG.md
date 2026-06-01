@@ -1,5 +1,27 @@
 # Changes
 
+## [0.20.5] - 2026-06-01
+
+### Fixed
+
+- **Ctrl-C now always triggers rollback** — previously, when no `--duration`
+  was set, the confirmation prompt (`Press 'y' to finish and rollback`) blocked
+  the async runtime synchronously. A SIGINT at that point killed the process
+  before `plt.rollback()` could run, leaving injected Service selectors and
+  proxy resources in place. The prompt is now run on a thread-pool thread via
+  `spawn_blocking` so the async runtime stays live; a `tokio::select!` races
+  the prompt completion against `ctrl_c()`, and rollback always executes
+  afterward.
+
+### Added
+
+- **System service protection** — the Kubernetes API server service
+  (`kubernetes` in `default`) and all services in system namespaces
+  (`kube-system`, `kube-public`, `kube-node-lease`) are now excluded from the
+  interactive service selection list and blocked at the `set_service` call when
+  passed via `--service`. Attempting to inject into a protected service returns
+  a clear error message suggesting `--ns` if the wrong namespace was used.
+
 ## [0.20.4] - 2026-06-01
 
 ### Changed

@@ -27,6 +27,26 @@ use crate::inject::Platform;
 use crate::inject::ServiceResource;
 use crate::inject::k8s::env_override::EnvOverride;
 
+// ---------------------------------------------------------------------------
+// System service protection
+// ---------------------------------------------------------------------------
+
+/// Namespaces that are exclusively for Kubernetes infrastructure.
+/// Services in these namespaces must never be injected into.
+const SYSTEM_NAMESPACES: &[&str] =
+    &["kube-system", "kube-public", "kube-node-lease"];
+
+/// Well-known infrastructure service names that are dangerous to inject into
+/// regardless of namespace (e.g. the `kubernetes` API server service lives in
+/// `default`).
+const SYSTEM_SERVICE_NAMES: &[&str] = &["kubernetes"];
+
+/// Returns true if the given service should be blocked from injection.
+fn is_system_service(name: &str, namespace: &str) -> bool {
+    SYSTEM_NAMESPACES.contains(&namespace)
+        || SYSTEM_SERVICE_NAMES.contains(&name)
+}
+
 /// Kubernetes implementation of `Platform`.
 ///
 /// Two modes:
@@ -157,11 +177,14 @@ impl KubernetesPlatform {
         self.standalone_proxy_name.is_some()
     }
 
-    /// Helper: get only the Service‐kind entries (with address)
+    /// Helper: get only the Service‐kind entries (with address),
+    /// excluding known system/infrastructure services that must never
+    /// be injected into.
     fn cached_services(&self) -> Vec<ServiceResource> {
         self.resources
             .iter()
             .filter(|r| r.meta.kind == "Service")
+            .filter(|r| !is_system_service(&r.meta.name, &r.meta.ns))
             .map(|r| {
                 let addr = r.content["spec"]["clusterIP"]
                     .as_str()
@@ -199,6 +222,15 @@ impl Platform for KubernetesPlatform {
     }
 
     fn set_service(&mut self, service: &str) -> Result<()> {
+        if is_system_service(service, &self.namespace) {
+            anyhow::bail!(
+                "Service '{}' in namespace '{}' is a protected system service \
+                 and cannot be injected into. If you intended a different \
+                 service, use --ns to set the correct namespace.",
+                service,
+                self.namespace
+            );
+        }
         self.service_name = service.to_string();
         Ok(())
     }

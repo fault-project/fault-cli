@@ -1057,6 +1057,53 @@ fn is_stealth(cli: &RunCommandOptions) -> bool {
     false
 }
 
+/// Wait for either a duration to elapse, a Ctrl-C signal, or the user to
+/// confirm they are done. Rollback is always called after this returns,
+/// including when the process receives SIGINT — the blocking prompt is run on
+/// a separate thread so the async runtime stays live and can receive signals.
+#[cfg(feature = "discovery")]
+async fn wait_for_rollback(duration: &Option<String>) -> Result<()> {
+    match duration {
+        Some(d) => match parse_duration::parse(d.as_str()) {
+            Ok(total) => {
+                println!("  Injecting fault for {}", d);
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {
+                        tracing::info!("Ctrl-C received — rolling back.");
+                    }
+                    _ = sleep(total) => {
+                        tracing::info!("Duration elapsed — rolling back.");
+                    }
+                }
+            }
+            Err(_) => anyhow::bail!("failed to parse the duration flag"),
+        },
+        None => {
+            // Run the blocking prompt on a thread-pool thread so tokio keeps
+            // running and can receive SIGINT. When Ctrl-C fires we send on a
+            // oneshot channel which races against the prompt completing.
+            let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+            tokio::task::spawn_blocking(move || {
+                let _ = Confirm::new(&format!(
+                    "Press '{}' to finish and rollback",
+                    "y".to_string().green()
+                ))
+                .prompt();
+                let _ = tx.send(());
+            });
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!("Ctrl-C received — rolling back.");
+                }
+                _ = rx => {
+                    tracing::info!("User confirmed — rolling back.");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(feature = "discovery")]
 pub async fn run_fault_injector_roundtrip<P: Platform>(
     plt: &mut P,
@@ -1076,40 +1123,15 @@ pub async fn run_fault_injector_roundtrip<P: Platform>(
 
     plt.inject().await?;
     println!("  Deploying fault...");
-    //plt.wait_ready().await?;
     println!(
         "   Injected into service {} 🚀.\n   You can now explore how your system reacts to its new conditions.",
         svc.name.yellow()
     );
 
-    match duration {
-        Some(d) => match parse_duration::parse(d.as_str()) {
-            Ok(total) => {
-                println!("  Injecting fault for {}", d);
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {
-                        tracing::info!("Shutdown signal received. Initiating shutdown.");
-                    }
-
-                    _ = sleep(total) => {
-                        tracing::info!("Time's up! Shutting down now.");
-                    }
-                }
-            }
-            Err(_) => anyhow::bail!("failed to parse the duration flag"),
-        },
-        None => {
-            let _ = Confirm::new(&format!(
-                "Press '{}' to finish and rollback",
-                "y".to_string().green()
-            ))
-            .prompt();
-        }
-    }
+    wait_for_rollback(duration).await?;
 
     println!("  Rolling back fault...");
     plt.rollback().await?;
-    //plt.wait_cleanup().await?;
     println!("  Rolled back.");
 
     Ok(())
@@ -1131,29 +1153,7 @@ async fn run_standalone_injector_roundtrip<P: Platform>(
         proxy_name.yellow()
     );
 
-    match duration {
-        Some(d) => match parse_duration::parse(d.as_str()) {
-            Ok(total) => {
-                println!("  Injecting fault for {}", d);
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {
-                        tracing::info!("Shutdown signal received. Initiating shutdown.");
-                    }
-                    _ = sleep(total) => {
-                        tracing::info!("Time's up! Shutting down now.");
-                    }
-                }
-            }
-            Err(_) => anyhow::bail!("failed to parse the duration flag"),
-        },
-        None => {
-            let _ = Confirm::new(&format!(
-                "Press '{}' to finish and rollback",
-                "y".to_string().green()
-            ))
-            .prompt();
-        }
-    }
+    wait_for_rollback(duration).await?;
 
     println!("  Rolling back fault...");
     plt.rollback().await?;
