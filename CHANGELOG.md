@@ -1,5 +1,16 @@
 # Changes
 
+## [0.20.3] - 2026-06-01
+
+### Fixed
+
+- **`--env-override` upstream resolution with split host/port keys** — when
+  separate `DB_HOST={host}` and `DB_PORT={port}` overrides are used, the proxy
+  upstream was assembled from only the first key's current value, producing a
+  portless address (e.g. `prod-db.example.com` instead of
+  `prod-db.example.com:5432`) which caused the proxy to fail to connect.
+  `resolve_upstream` now reads both keys and combines them into `host:port`.
+
 ## [0.20.2] - 2026-06-01
 
 ### Changed
