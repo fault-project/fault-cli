@@ -50,11 +50,18 @@ use crate::discovery::types::EnvVarRollbackEntry;
 /// The value side of an `--env-override` entry.
 #[derive(Clone, Debug)]
 pub enum EnvOverrideValue {
-    /// Explicit value supplied by the user: `KEY=VALUE`.
-    Explicit(String),
-    /// Auto-inject: no value was given; fault will fill in the proxy's
-    /// own in-cluster address (`proxy-name:port`) at inject time.
-    Auto,
+    /// Literal value with no substitution: `KEY=VALUE` where VALUE contains
+    /// neither `{host}` nor `{port}`.
+    Literal(String),
+    /// Template: `KEY=VALUE` where VALUE contains `{host}` and/or `{port}`.
+    /// fault substitutes the proxy's hostname and port at inject time.
+    ///
+    /// Examples:
+    ///   `DB_HOST={host}`
+    ///   `DB_PORT={port}`
+    ///   `DATABASE_URL=postgres://{host}:{port}/mydb`
+    ///   `API_URL=https://{host}:{port}/v1`
+    Template(String),
 }
 
 /// A single parsed `--env-override` entry.
@@ -129,9 +136,19 @@ pub fn parse_env_overrides(raw: &[String]) -> Result<Vec<EnvOverride>> {
         };
 
         let (key, value) = match kv_part.split_once('=') {
-            Some((k, v)) => (k, EnvOverrideValue::Explicit(v.to_string())),
-            // No '=' → auto-inject the proxy address
-            None => (kv_part, EnvOverrideValue::Auto),
+            Some((k, v)) => {
+                let val = if v.contains("{host}") || v.contains("{port}") {
+                    EnvOverrideValue::Template(v.to_string())
+                } else {
+                    EnvOverrideValue::Literal(v.to_string())
+                };
+                (k, val)
+            }
+            None => bail!(
+                "--env-override '{}': missing '=VALUE'. Use KEY=VALUE or a \
+                 template like KEY=https://{{host}}:{{port}}/path",
+                s
+            ),
         };
 
         if key.trim().is_empty() {
@@ -223,42 +240,44 @@ pub async fn resolve_current_value(
 
 /// Apply env-var overrides to the explicitly named workloads / ConfigMaps.
 ///
-/// `proxy_addr` — the in-cluster address of the fault proxy (`"name:port"`),
-/// used to fill in `EnvOverrideValue::Auto` entries.  Pass an empty string
-/// when no auto entries are expected (e.g. inbound proxy mode).
+/// `proxy_host` and `proxy_port_str` are substituted into `Template` values
+/// for `{host}` and `{port}` respectively. Pass empty strings when no
+/// template entries are expected (e.g. inbound proxy mode — templates there
+/// would be a user error caught at resolution time).
 ///
 /// Returns rollback entries for everything that was actually changed.
 pub async fn apply_env_overrides(
     client: Client,
     ns: &str,
     overrides: &[EnvOverride],
-    proxy_addr: &str,
+    proxy_host: &str,
+    proxy_port_str: &str,
 ) -> Result<Vec<EnvVarRollbackEntry>> {
     if overrides.is_empty() {
         return Ok(vec![]);
     }
 
     // Group by (kind, name) so we make one patch per resource.
-    // Resolve Auto entries to the proxy address here.
+    // Resolve Template entries by substituting {host} and {port}.
     let mut by_resource: BTreeMap<
         (WorkloadKind, String),
         BTreeMap<String, String>,
     > = BTreeMap::new();
     for ov in overrides {
         let resolved_value = match &ov.value {
-            EnvOverrideValue::Explicit(v) => v.clone(),
-            EnvOverrideValue::Auto => {
-                if proxy_addr.is_empty() {
+            EnvOverrideValue::Literal(v) => v.clone(),
+            EnvOverrideValue::Template(t) => {
+                if proxy_host.is_empty() {
                     bail!(
-                        "--env-override '{}/{}:{}': auto proxy address \
-                         requested but no proxy address is available in \
-                         this injection mode.",
+                        "--env-override '{}/{}:{}': template requires a proxy \
+                         host but none is available in this injection mode.",
                         ov.kind.as_str(),
                         ov.name,
                         ov.key
                     );
                 }
-                proxy_addr.to_string()
+                t.replace("{host}", proxy_host)
+                    .replace("{port}", proxy_port_str)
             }
         };
         by_resource

@@ -1,5 +1,28 @@
 # Changes
 
+## [0.20.2] - 2026-06-01
+
+### Changed
+
+- **`--env-override` template substitution** — the value now supports
+  `{host}` and `{port}` placeholders that fault replaces with the proxy's
+  in-cluster name and port (`3180`) at inject time. Any combination works:
+
+  ```
+  --env-override configmap/my-config:DB_HOST={host}
+  --env-override configmap/my-config:DB_PORT={port}
+  --env-override configmap/my-config:DATABASE_URL=postgres://{host}:{port}/mydb
+  --env-override configmap/my-config:API_URL=https://{host}:{port}/v1
+  ```
+
+  Values without `{host}` or `{port}` are treated as literals (unchanged
+  from before).
+
+### Removed
+
+- **Bare `KEY` without `=VALUE`** — previously accepted as an auto-inject
+  shorthand, now a parse error. Use `KEY={host}:{port}` instead.
+
 ## [0.20.1] - 2026-06-01
 
 ### Changed

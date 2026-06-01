@@ -329,15 +329,14 @@ pub async fn inject_fault_proxy(
         .patch(orig_name, &PatchParams::default(), &Patch::Json::<()>(patch))
         .await?;
 
-    // Apply env var overrides to Deployments / StatefulSets in the namespace.
-    // This causes a rolling restart of those workloads so they pick up the
-    // new address (e.g. pointing DB_HOST at the fault proxy service).
-    // Inbound mode: no auto proxy-addr injection (pass "").
+    // Apply env var overrides. Inbound mode: pass empty strings for host/port
+    // — templates would be a user error and are caught inside the function.
     let env_var_rollback: Vec<EnvVarRollbackEntry> =
         env_override::apply_env_overrides(
             client.clone(),
             ns,
             env_overrides,
+            "",
             "",
         )
         .await?;
@@ -496,13 +495,13 @@ pub async fn inject_fault_proxy_standalone(
         .await?;
 
     // Patch env vars so workloads point at the in-cluster proxy Service.
-    // Pass the proxy's in-cluster address for Auto entries.
-    let proxy_addr = format!("{}:{}", proxy_name, proxy_port);
+    // Substitute {host} → proxy_name, {port} → proxy_port in templates.
     let env_var_rollback = env_override::apply_env_overrides(
         client.clone(),
         ns,
         env_overrides,
-        &proxy_addr,
+        proxy_name,
+        &proxy_port.to_string(),
     )
     .await?;
 

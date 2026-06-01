@@ -1423,22 +1423,24 @@ pub struct FaultInjectionKubernetesConfig {
     pub name: Option<String>,
 
     /// Override a value in a specific workload or ConfigMap.
-    /// Two formats:
-    ///   kind/name:KEY=VALUE  — set KEY to an explicit value
-    ///   kind/name:KEY        — set KEY to the proxy's address automatically
-    ///                          (proxy-name:port, resolved at inject time)
+    /// Format: kind/name:KEY=VALUE
+    /// VALUE may be a literal or a template using {host} and {port}, which
+    /// fault substitutes with the proxy's in-cluster name and port (3180).
     /// Supported kinds: deployment, statefulset, configmap (aliases: deploy,
     /// sts, cm)
     /// Examples:
-    ///   --env-override configmap/my-config:DB_HOST        (auto proxy addr)
-    ///   --env-override configmap/my-config:DB_HOST=host:5432  (explicit)
+    ///   --env-override configmap/my-config:DB_HOST={host}
+    ///   --env-override configmap/my-config:DB_PORT={port}
+    ///   --env-override
+    /// configmap/my-config:DATABASE_URL=postgres://{host}:{port}/db   --env-override configmap/my-config:API_URL=https://{host}:{port}/v1
+    ///   --env-override configmap/my-config:DB_HOST=some-literal-host
     /// Can be repeated. On rollback the original value is restored.
     /// For deployment/statefulset a rolling restart is triggered
     /// automatically. For configmap only the data key is patched; rollout
     /// is left to the user.
     #[arg(
         long = "env-override",
-        help = "Override a value in kind/name:KEY[=VALUE] format. Repeatable.",
+        help = "Override a value in kind/name:KEY=VALUE format. Supports {host}/{port} templates. Repeatable.",
         env = "FAULT_INJECTION_K8S_ENV_OVERRIDES",
         value_delimiter = ',',
         num_args = 0..
