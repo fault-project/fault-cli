@@ -332,9 +332,15 @@ pub async fn inject_fault_proxy(
     // Apply env var overrides to Deployments / StatefulSets in the namespace.
     // This causes a rolling restart of those workloads so they pick up the
     // new address (e.g. pointing DB_HOST at the fault proxy service).
+    // Inbound mode: no auto proxy-addr injection (pass "").
     let env_var_rollback: Vec<EnvVarRollbackEntry> =
-        env_override::apply_env_overrides(client.clone(), ns, env_overrides)
-            .await?;
+        env_override::apply_env_overrides(
+            client.clone(),
+            ns,
+            env_overrides,
+            "",
+        )
+        .await?;
 
     let snapshot = K8sSpecSnapshot {
         selector: original_selector,
@@ -489,10 +495,16 @@ pub async fn inject_fault_proxy_standalone(
         .create(&pp, &frontend_svc)
         .await?;
 
-    // Now patch env vars so workloads point at the in-cluster proxy Service
-    let env_var_rollback =
-        env_override::apply_env_overrides(client.clone(), ns, env_overrides)
-            .await?;
+    // Patch env vars so workloads point at the in-cluster proxy Service.
+    // Pass the proxy's in-cluster address for Auto entries.
+    let proxy_addr = format!("{}:{}", proxy_name, proxy_port);
+    let env_var_rollback = env_override::apply_env_overrides(
+        client.clone(),
+        ns,
+        env_overrides,
+        &proxy_addr,
+    )
+    .await?;
 
     Ok(K8sSpecSnapshot {
         // No selector/ports snapshot needed — we never touched an existing

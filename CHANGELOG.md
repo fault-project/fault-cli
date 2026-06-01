@@ -1,5 +1,30 @@
 # Changes
 
+## [0.20.1] - 2026-06-01
+
+### Changed
+
+- **`--env-override` auto proxy address injection** — the value side is now
+  optional. `kind/name:KEY` (no `=VALUE`) instructs fault to automatically
+  fill in the proxy's own in-cluster address (`proxy-name:3180`) at inject
+  time, so you no longer need to know the proxy name ahead of time when using
+  a generated suffix.
+
+- **`--env-override` value is now `Explicit | Auto`** — internally the value
+  field is now a typed enum; the parser accepts both `KEY=VALUE` and bare
+  `KEY`.
+
+### Removed
+
+- **`--env-override-ns`** — dropped before it shipped. The `--ns` flag already
+  scopes everything; a separate override namespace would require cross-namespace
+  RBAC which is out of scope.
+
+- **Port derivation from `--env-override` value** — the standalone proxy
+  always listens on port `3180`, consistent with the inbound proxy. The
+  `:PORT` suffix in an explicit value is the *upstream* port, not the proxy's
+  listen port; parsing it as the proxy port was wrong.
+
 ## [0.20.0] - 2026-05-29
 
 ### Added

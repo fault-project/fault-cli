@@ -45,7 +45,7 @@ pub struct KubernetesPlatform {
     namespace: String,
     scenario: Option<String>,
     fault_settings: Option<BTreeMap<String, String>>,
-    /// Targeted env var overrides (kind/name:KEY=VALUE).
+    /// Targeted env var overrides (kind/name:KEY[=VALUE]).
     env_overrides: Vec<EnvOverride>,
     /// `Some(proxy_name)` → standalone outbound mode.
     /// `None`             → inbound service-based mode.

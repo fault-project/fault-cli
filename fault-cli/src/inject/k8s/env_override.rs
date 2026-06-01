@@ -47,13 +47,23 @@ use crate::discovery::types::EnvVarRollbackEntry;
 // Types
 // ---------------------------------------------------------------------------
 
+/// The value side of an `--env-override` entry.
+#[derive(Clone, Debug)]
+pub enum EnvOverrideValue {
+    /// Explicit value supplied by the user: `KEY=VALUE`.
+    Explicit(String),
+    /// Auto-inject: no value was given; fault will fill in the proxy's
+    /// own in-cluster address (`proxy-name:port`) at inject time.
+    Auto,
+}
+
 /// A single parsed `--env-override` entry.
 #[derive(Clone, Debug)]
 pub struct EnvOverride {
     pub kind: WorkloadKind,
     pub name: String,
     pub key: String,
-    pub value: String,
+    pub value: EnvOverrideValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -119,12 +129,9 @@ pub fn parse_env_overrides(raw: &[String]) -> Result<Vec<EnvOverride>> {
         };
 
         let (key, value) = match kv_part.split_once('=') {
-            Some(pair) => pair,
-            None => bail!(
-                "--env-override '{}': env var part '{}' must be 'KEY=VALUE'",
-                s,
-                kv_part
-            ),
+            Some((k, v)) => (k, EnvOverrideValue::Explicit(v.to_string())),
+            // No '=' → auto-inject the proxy address
+            None => (kv_part, EnvOverrideValue::Auto),
         };
 
         if key.trim().is_empty() {
@@ -135,7 +142,7 @@ pub fn parse_env_overrides(raw: &[String]) -> Result<Vec<EnvOverride>> {
             kind,
             name: workload_name.to_string(),
             key: key.to_string(),
-            value: value.to_string(),
+            value,
         });
     }
 
@@ -215,26 +222,49 @@ pub async fn resolve_current_value(
 // ---------------------------------------------------------------------------
 
 /// Apply env-var overrides to the explicitly named workloads / ConfigMaps.
+///
+/// `proxy_addr` — the in-cluster address of the fault proxy (`"name:port"`),
+/// used to fill in `EnvOverrideValue::Auto` entries.  Pass an empty string
+/// when no auto entries are expected (e.g. inbound proxy mode).
+///
 /// Returns rollback entries for everything that was actually changed.
 pub async fn apply_env_overrides(
     client: Client,
     ns: &str,
     overrides: &[EnvOverride],
+    proxy_addr: &str,
 ) -> Result<Vec<EnvVarRollbackEntry>> {
     if overrides.is_empty() {
         return Ok(vec![]);
     }
 
     // Group by (kind, name) so we make one patch per resource.
+    // Resolve Auto entries to the proxy address here.
     let mut by_resource: BTreeMap<
         (WorkloadKind, String),
         BTreeMap<String, String>,
     > = BTreeMap::new();
     for ov in overrides {
+        let resolved_value = match &ov.value {
+            EnvOverrideValue::Explicit(v) => v.clone(),
+            EnvOverrideValue::Auto => {
+                if proxy_addr.is_empty() {
+                    bail!(
+                        "--env-override '{}/{}:{}': auto proxy address \
+                         requested but no proxy address is available in \
+                         this injection mode.",
+                        ov.kind.as_str(),
+                        ov.name,
+                        ov.key
+                    );
+                }
+                proxy_addr.to_string()
+            }
+        };
         by_resource
             .entry((ov.kind.clone(), ov.name.clone()))
             .or_default()
-            .insert(ov.key.clone(), ov.value.clone());
+            .insert(ov.key.clone(), resolved_value);
     }
 
     let deploys: Api<Deployment> = Api::namespaced(client.clone(), ns);

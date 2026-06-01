@@ -940,19 +940,12 @@ async fn main() -> Result<()> {
                         format!("fault-proxy-{}", suffix)
                     });
 
-                    // Port: from the new value's "host:port", else 3180
-                    let proxy_port: i32 = first
-                        .value
-                        .rsplit_once(':')
-                        .and_then(|(_, p)| p.parse().ok())
-                        .unwrap_or(3180);
-
                     let plt =
                         &mut inject::k8s::KubernetesPlatform::new_standalone(
                             &cfg.ns,
                             &proxy_name,
                             &upstream,
-                            proxy_port,
+                            3180,
                             &cfg.image,
                             &api_address,
                             fault_settings,

@@ -1423,18 +1423,22 @@ pub struct FaultInjectionKubernetesConfig {
     pub name: Option<String>,
 
     /// Override a value in a specific workload or ConfigMap.
-    /// Format: kind/name:KEY=VALUE
+    /// Two formats:
+    ///   kind/name:KEY=VALUE  — set KEY to an explicit value
+    ///   kind/name:KEY        — set KEY to the proxy's address automatically
+    ///                          (proxy-name:port, resolved at inject time)
     /// Supported kinds: deployment, statefulset, configmap (aliases: deploy,
-    /// sts, cm) Examples:
-    ///   --env-override deployment/my-api:DB_HOST=proxy-svc:5432
-    ///   --env-override configmap/my-app-config:DB_HOST=proxy-svc:5432
+    /// sts, cm)
+    /// Examples:
+    ///   --env-override configmap/my-config:DB_HOST        (auto proxy addr)
+    ///   --env-override configmap/my-config:DB_HOST=host:5432  (explicit)
     /// Can be repeated. On rollback the original value is restored.
     /// For deployment/statefulset a rolling restart is triggered
     /// automatically. For configmap only the data key is patched; rollout
     /// is left to the user.
     #[arg(
         long = "env-override",
-        help = "Override a value in kind/name:KEY=VALUE format. Repeatable.",
+        help = "Override a value in kind/name:KEY[=VALUE] format. Repeatable.",
         env = "FAULT_INJECTION_K8S_ENV_OVERRIDES",
         value_delimiter = ',',
         num_args = 0..
