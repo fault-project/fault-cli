@@ -1,5 +1,17 @@
 # Changes
 
+## [0.20.9] - 2026-06-01
+
+### Fixed
+
+- **HTTP proxy mode not reachable in Kubernetes** — when `--with-http-response`
+  was set, the injected proxy Job started the HTTP CONNECT proxy on
+  `127.0.0.1:3180` (the default). Inside a pod, Kubernetes Service traffic
+  arrives on the pod's non-loopback interface, so connections were silently
+  dropped. The HTTP mode args now pass `--proxy-address 0.0.0.0:{proxy_port}`
+  so the HTTP CONNECT proxy binds to all interfaces and is reachable from the
+  Service.
+
 ## [0.20.8] - 2026-06-01
 
 ### Changed
