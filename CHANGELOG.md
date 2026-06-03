@@ -1,5 +1,22 @@
 # Changes
 
+## [0.20.8] - 2026-06-01
+
+### Changed
+
+- **Stream summary log is now `info` level with a readable one-liner** —
+  previously a structured `trace!` event with key=value fields, now a plain
+  `info!` message in the format:
+
+  ```
+  src: 10.0.1.5:43210  dst: my-api-backend[10.0.2.3:5432]  fault: latency(mean=200ms)  bypassed: no
+  src: 10.0.1.5:43211  dst: prod-db.example.com[10.0.2.4:5432]  fault: none  bypassed: no
+  ```
+
+  Both hostname and resolved IP:port are shown in the `dst` field so you
+  don't need to memorise IP addresses. Emitted from both the TCP proxy
+  and HTTP CONNECT tunnel paths.
+
 ## [0.20.7] - 2026-06-01
 
 ### Added

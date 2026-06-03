@@ -91,6 +91,7 @@ pub async fn run_tcp_proxy(
 
                         let stream = stream;
 
+                        let remote_host_spawn = remote_host.clone();
                         tokio::spawn(async move {
                             let proto = proto.clone();
 
@@ -111,14 +112,13 @@ pub async fn run_tcp_proxy(
                                             .collect();
                                         if parts.is_empty() { "none".to_string() } else { parts.join(", ") }
                                     };
-                                    tracing::trace!(
-                                        src = %addr,
-                                        dst = %connect_to,
-                                        bypassed = false,
-                                        fault = %faults_desc,
-                                        c2s_bytes = bytes_from_client,
-                                        s2c_bytes = bytes_to_server,
-                                        "stream"
+                                    tracing::info!(
+                                        "src: {}  dst: {}[{}]  fault: {}  bypassed: {}",
+                                        addr,
+                                        remote_host_spawn,
+                                        connect_to,
+                                        faults_desc,
+                                        if false { "yes" } else { "no" },
                                     );
                                     let _ = event.on_response(0);
                                     let _ = event.on_completed(

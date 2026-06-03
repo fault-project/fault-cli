@@ -133,15 +133,13 @@ pub async fn handle_connect(
                                     parts.join(", ")
                                 }
                             };
-                            tracing::trace!(
-                                src = %source_addr,
-                                dst = %addr,
-                                host = %host,
-                                bypassed = passthrough,
-                                fault = %faults_desc,
-                                c2s_bytes = bytes_from_client,
-                                s2c_bytes = bytes_to_server,
-                                "stream"
+                            tracing::info!(
+                                "src: {}  dst: {}[{}]  fault: {}  bypassed: {}",
+                                source_addr,
+                                host,
+                                addr,
+                                faults_desc,
+                                if passthrough { "yes" } else { "no" },
                             );
                             let _ = event.on_response(0);
                             let _ = event.on_completed(
