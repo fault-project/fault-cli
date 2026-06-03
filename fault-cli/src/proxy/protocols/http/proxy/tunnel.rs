@@ -119,6 +119,30 @@ pub async fn handle_connect(
                     .await
                     {
                         Ok((bytes_from_client, bytes_to_server)) => {
+                            let faults_desc = {
+                                let loaded = app_state.faults_plugin.load();
+                                let parts: Vec<String> = loaded
+                                    .injectors
+                                    .iter()
+                                    .map(|i| i.to_string())
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+                                if parts.is_empty() {
+                                    "none".to_string()
+                                } else {
+                                    parts.join(", ")
+                                }
+                            };
+                            tracing::trace!(
+                                src = %source_addr,
+                                dst = %addr,
+                                host = %host,
+                                bypassed = passthrough,
+                                fault = %faults_desc,
+                                c2s_bytes = bytes_from_client,
+                                s2c_bytes = bytes_to_server,
+                                "stream"
+                            );
                             let _ = event.on_response(0);
                             let _ = event.on_completed(
                                 start.elapsed(),

@@ -103,6 +103,23 @@ pub async fn run_tcp_proxy(
                                 Some(proto.clone())
                             ).await {
                                 Ok((bytes_from_client, bytes_to_server)) => {
+                                    let faults_desc = {
+                                        let loaded = state.faults_plugin.load();
+                                        let parts: Vec<String> = loaded.injectors.iter()
+                                            .map(|i| i.to_string())
+                                            .filter(|s| !s.is_empty())
+                                            .collect();
+                                        if parts.is_empty() { "none".to_string() } else { parts.join(", ") }
+                                    };
+                                    tracing::trace!(
+                                        src = %addr,
+                                        dst = %connect_to,
+                                        bypassed = false,
+                                        fault = %faults_desc,
+                                        c2s_bytes = bytes_from_client,
+                                        s2c_bytes = bytes_to_server,
+                                        "stream"
+                                    );
                                     let _ = event.on_response(0);
                                     let _ = event.on_completed(
                                         start.elapsed(),

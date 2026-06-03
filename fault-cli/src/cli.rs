@@ -1425,6 +1425,17 @@ pub struct FaultInjectionKubernetesConfig {
     )]
     pub dry_run: bool,
 
+    /// Enable verbose (debug-level) logging in the injected proxy.
+    /// By default the proxy logs at info level. Use this flag to get
+    /// detailed per-request debug logs from the proxy container.
+    #[arg(
+        long,
+        help = "Enable debug-level logging in the injected proxy (default: info).",
+        env = "FAULT_INJECTION_K8S_VERBOSE",
+        default_value_t = false
+    )]
+    pub verbose: bool,
+
     /// Name for the injected proxy resources. Used in standalone outbound
     /// mode (when --env-override is set without --service). If omitted a
     /// short random suffix is generated. Has no effect in inbound mode where

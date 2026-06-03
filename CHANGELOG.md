@@ -1,5 +1,28 @@
 # Changes
 
+## [0.20.7] - 2026-06-01
+
+### Added
+
+- **`--verbose` flag for `fault inject kubernetes`** — the injected proxy Job
+  now runs at `info` log level by default (previously `debug`). Pass
+  `--verbose` to get `debug`-level logs from the proxy container, or set
+  `FAULT_INJECTION_K8S_VERBOSE=true`.
+
+- **Lean `trace`-level stream summary log** — after each stream completes, a
+  single structured `trace` event is emitted with the following fields:
+  - `src` — client socket address (IP:port)
+  - `dst` — upstream socket address (IP:port)
+  - `host` — upstream hostname (HTTP CONNECT path only)
+  - `bypassed` — whether fault injection was skipped for this stream
+  - `fault` — comma-separated list of active fault injectors, or `"none"`
+  - `c2s_bytes` / `s2c_bytes` — bytes transferred in each direction
+
+  Emitted from both the TCP proxy path (`tcp/mod.rs`) and the HTTP CONNECT
+  tunnel path (`http/proxy/tunnel.rs`). To see these lines set the proxy
+  log level to `trace` (e.g. via `FAULT_LOG_LEVEL=trace` or
+  `--log-level trace` when running `fault run` locally).
+
 ## [0.20.6] - 2026-06-01
 
 ### Added

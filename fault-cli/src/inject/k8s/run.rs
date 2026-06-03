@@ -132,7 +132,9 @@ fn build_proxy_job(
     proxy_port: i32,
     proxy_arg: String,
     http_mode: bool,
+    verbose: bool,
 ) -> Job {
+    let log_level = if verbose { "debug" } else { "info" };
     let readiness_probe = Probe {
         tcp_socket: Some(TCPSocketAction {
             port:
@@ -158,7 +160,7 @@ fn build_proxy_job(
         vec![
             "--log-stdout".into(),
             "--log-level".into(),
-            "debug".into(),
+            log_level.into(),
             "run".into(),
             "--no-ui".into(),
         ]
@@ -166,7 +168,7 @@ fn build_proxy_job(
         vec![
             "--log-stdout".into(),
             "--log-level".into(),
-            "debug".into(),
+            log_level.into(),
             "run".into(),
             "--no-ui".into(),
             "--disable-http-proxy".into(),
@@ -264,6 +266,7 @@ pub async fn inject_fault_proxy(
     container_image: String,
     api_address: String,
     env_overrides: &[EnvOverride],
+    verbose: bool,
 ) -> Result<K8sSpecSnapshot> {
     let ns = &svc.meta.ns;
     let orig_name = &svc.meta.name;
@@ -309,6 +312,7 @@ pub async fn inject_fault_proxy(
         proxy_port,
         proxy_arg,
         http_mode,
+        verbose,
     );
 
     // Create the proxy
@@ -479,6 +483,7 @@ pub async fn inject_fault_proxy_standalone(
     container_image: &str,
     fault_settings: &mut BTreeMap<String, String>,
     env_overrides: &[EnvOverride],
+    verbose: bool,
 ) -> Result<K8sSpecSnapshot> {
     let mut labels = BTreeMap::new();
     labels.insert("app".into(), proxy_name.to_string());
@@ -512,6 +517,7 @@ pub async fn inject_fault_proxy_standalone(
         proxy_port,
         proxy_arg,
         false,
+        verbose,
     );
 
     // Frontend ClusterIP Service — pods reach the proxy through this

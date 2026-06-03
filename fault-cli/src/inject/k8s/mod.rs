@@ -80,6 +80,7 @@ pub struct KubernetesPlatform {
     api_address: String,
     resources: Vec<Resource>,
     injection_handle: Option<InjectionHandle>,
+    verbose: bool,
 }
 
 impl KubernetesPlatform {
@@ -91,6 +92,7 @@ impl KubernetesPlatform {
         api_address: &str,
         fault_settings: BTreeMap<String, String>,
         env_overrides: Vec<EnvOverride>,
+        verbose: bool,
     ) -> Result<Self> {
         let client = Client::try_default().await?;
         let resources = discover_kubernetes_resources(namespace).await?;
@@ -108,6 +110,7 @@ impl KubernetesPlatform {
             api_address: api_address.to_string(),
             resources,
             injection_handle: None,
+            verbose,
         })
     }
 
@@ -123,6 +126,7 @@ impl KubernetesPlatform {
         api_address: &str,
         fault_settings: BTreeMap<String, String>,
         env_overrides: Vec<EnvOverride>,
+        verbose: bool,
     ) -> Result<Self> {
         let client = Client::try_default().await?;
         let resources = discover_kubernetes_resources(namespace).await?;
@@ -140,6 +144,7 @@ impl KubernetesPlatform {
             api_address: api_address.to_string(),
             resources,
             injection_handle: None,
+            verbose,
         })
     }
 
@@ -166,6 +171,7 @@ impl KubernetesPlatform {
             api_address: api_address.to_string(),
             resources,
             injection_handle: None,
+            verbose: false,
         })
     }
 
@@ -250,6 +256,7 @@ impl Platform for KubernetesPlatform {
                 &self.container_image,
                 fault_vars,
                 &self.env_overrides,
+                self.verbose,
             )
             .await?
         } else if self.is_scenario() {
@@ -274,6 +281,7 @@ impl Platform for KubernetesPlatform {
                 self.container_image.clone(),
                 self.api_address.clone(),
                 &self.env_overrides,
+                self.verbose,
             )
             .await?
         };

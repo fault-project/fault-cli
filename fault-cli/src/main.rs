@@ -947,6 +947,7 @@ async fn main() -> Result<()> {
                             &api_address,
                             fault_settings,
                             env_overrides,
+                            cfg.verbose,
                         )
                         .await?;
 
@@ -970,6 +971,7 @@ async fn main() -> Result<()> {
                                 &api_address,
                                 fault_settings,
                                 env_overrides,
+                                cfg.verbose,
                             )
                             .await?;
 
@@ -989,6 +991,7 @@ async fn main() -> Result<()> {
                                 &api_address,
                                 fault_settings,
                                 env_overrides,
+                                cfg.verbose,
                             )
                             .await?;
 
@@ -1407,6 +1410,7 @@ async fn run_scenario_command(
                                         &api_address,
                                         fault_settings,
                                         Vec::new(),
+                                        false,
                                     ).await?;
                                     plt.inject().await?;
                                     plt.wait_ready().await?;
