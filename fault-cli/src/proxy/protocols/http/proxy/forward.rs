@@ -9,6 +9,7 @@ use axum::http::Request as AxumRequest;
 use axum::http::Response as AxumResponse;
 use axum::response::IntoResponse;
 use hyper::StatusCode;
+use reqwest::header::HOST;
 use reqwest::header::HeaderMap as ReqwestHeaderMap;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
@@ -121,10 +122,34 @@ impl Forward {
 
         let client = client_builder.build().unwrap();
 
-        // Build the Reqwest request builder
+        // Build the Reqwest request builder.
+        // Always set Host to the upstream host, overriding whatever the client
+        // sent. When the client talks to the proxy it naturally sets Host to
+        // the proxy's address (e.g. fault-proxy-myapi:3180); forwarding that
+        // verbatim causes the upstream server to reject the request with 400
+        // or a connection reset — which Firefox reports as
+        // NS_ERROR_INTERCEPTION_FAILED for CORS requests, while curl
+        // users typically notice it only when Host is wrong.
+        let mut forwarded_headers = convert_headers_to_reqwest(&headers);
+        let upstream_host = upstream
+            .host_str()
+            .map(|h| {
+                // include port only when non-default
+                match upstream.port() {
+                    Some(p) => format!("{}:{}", h, p),
+                    None => h.to_string(),
+                }
+            })
+            .unwrap_or_default();
+        if !upstream_host.is_empty() {
+            if let Ok(host_value) = upstream_host.parse() {
+                forwarded_headers.insert(HOST, host_value);
+            }
+        }
+
         let req_builder = client
             .request(method.clone(), upstream)
-            .headers(convert_headers_to_reqwest(&headers))
+            .headers(forwarded_headers)
             .body(body_bytes.to_vec());
 
         let mut upstream_req = req_builder.build().map_err(|e| {
@@ -250,6 +275,26 @@ impl Forward {
         let _ = event.on_response(new_status.as_u16());
 
         let response_bytes = new_body.len();
+
+        let faults_desc = {
+            let loaded = self.state.faults_plugin.load();
+            let parts: Vec<String> = loaded
+                .injectors
+                .iter()
+                .map(|i| i.to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if parts.is_empty() { "none".to_string() } else { parts.join(", ") }
+        };
+        tracing::info!(
+            "src: {}  dst: {}  status: {}  fault: {}  bypassed: {}",
+            source_addr,
+            upstream_host,
+            new_status,
+            faults_desc,
+            if passthrough { "yes" } else { "no" },
+        );
+
         let axum_response =
             AxumResponse::from_parts(new_parts, Body::from(new_body));
 

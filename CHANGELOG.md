@@ -1,5 +1,26 @@
 # Changes
 
+## [0.20.11] - 2026-06-01
+
+### Fixed
+
+- **HTTP forward proxy: Host header now always set to upstream host** —
+  previously the client's original `Host` header (pointing at the proxy
+  address, e.g. `fault-proxy-myapi:3180`) was forwarded verbatim to the
+  upstream server, which would reject the request with a `400` or a connection
+  reset. Firefox reports this as `NS_ERROR_INTERCEPTION_FAILED` for CORS
+  requests. `curl` users working around it by passing `-H "Host: real-host"`
+  masked the bug. The proxy now always overwrites `Host` with the upstream
+  hostname derived from the resolved URL, regardless of what the client sent.
+
+### Added
+
+- **Stream summary log in HTTP forward path** — the `info!` stream summary
+  line (`src / dst / status / fault / bypassed`) was previously only emitted
+  for TCP and HTTP CONNECT (tunnel) paths. It is now also emitted for plain
+  HTTP requests handled by the forward proxy, completing the logging story
+  for all three proxy paths.
+
 ## [0.20.10] - 2026-06-01
 
 ### Fixed
