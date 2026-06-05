@@ -157,10 +157,12 @@ fn build_proxy_job(
     // In TCP mode (the default) we disable the HTTP CONNECT proxy and use the
     // TCP proxy instead, which is transparent but cannot manipulate L7.
     let args = if http_mode {
-        // HTTP CONNECT proxy mode: listens on 0.0.0.0:proxy_port so
-        // Kubernetes Service traffic (arriving on the pod's non-loopback
-        // interface) reaches it. The default 127.0.0.1 would silently
-        // drop all inbound connections from the Service.
+        // HTTP CONNECT proxy mode:
+        // - 0.0.0.0:proxy_port so Kubernetes Service traffic (arriving on the
+        //   pod's non-loopback interface) reaches the proxy.
+        // - --upstream "*" so every host is faulted. Without this the
+        //   upstream_hosts list is empty, passthrough=true, and no faults are
+        //   ever applied.
         vec![
             "--log-stdout".into(),
             "--log-level".into(),
@@ -169,6 +171,8 @@ fn build_proxy_job(
             "--no-ui".into(),
             "--proxy-address".into(),
             format!("0.0.0.0:{}", proxy_port),
+            "--upstream".into(),
+            "*".into(),
         ]
     } else {
         vec![

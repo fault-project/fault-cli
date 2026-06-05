@@ -1,5 +1,17 @@
 # Changes
 
+## [0.20.10] - 2026-06-01
+
+### Fixed
+
+- **HTTP proxy mode: faults were always bypassed** — when no `--upstream` flag
+  is passed, `upstream_hosts` is empty, so every host fails the membership
+  check and `passthrough=true`. No faults were ever applied. The injected
+  proxy Job now passes `--upstream "*"` in HTTP mode, which is the wildcard
+  meaning "fault all hosts". This is correct for the injected case since the
+  proxy only receives traffic already routed to it by the Service selector
+  patch.
+
 ## [0.20.9] - 2026-06-01
 
 ### Fixed
