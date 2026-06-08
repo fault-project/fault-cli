@@ -1,5 +1,17 @@
 # Changes
 
+## [0.20.15] - 2026-06-08
+
+### Fixed
+
+- **CI: fix `cargo +nightly zigbuild` subcommand not found** — `cargo-binstall`
+  was used to install `cargo-zigbuild` but when called as `cargo +nightly
+  zigbuild` the nightly cargo couldn't find the subcommand. Replaced
+  `cargo-binstall` + `cargo binstall` with `cargo install --locked
+  cargo-zigbuild` (which the Swatinem cache handles), and dropped the
+  `+nightly` qualifier from the `cargo zigbuild` calls since `rustup override
+  set nightly` already sets nightly as the active toolchain for the directory.
+
 ## [0.20.14] - 2026-06-08
 
 ### Fixed

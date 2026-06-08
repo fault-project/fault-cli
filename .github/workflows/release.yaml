@@ -194,15 +194,9 @@ jobs:
         with:
           version: "0.13.0"
 
-      # cargo-binstall downloads a pre-built binary instead of compiling from
-      # source, saving ~5 min per musl target.
-      - name: Install cargo-binstall
-        if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
-        uses: cargo-bins/cargo-binstall@main
-
       - name: Install cargo zigbuild
         if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
-        run: cargo binstall -y cargo-zigbuild
+        run: cargo install --locked cargo-zigbuild
 
       - name: Build Linux/MacOSX (shared)
         if: matrix.os != 'windows-latest' && matrix.target != 'x86_64-unknown-linux-musl' && matrix.target != 'aarch64-unknown-linux-musl'
@@ -216,7 +210,7 @@ jobs:
 
       - name: Build (static)
         if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
-        run: cargo +nightly zigbuild --locked --profile ${{ matrix.profile }} --target ${{ matrix.target }}
+        run: cargo zigbuild --locked --profile ${{ matrix.profile }} --target ${{ matrix.target }}
         working-directory: ./fault-cli
 
       - name: Upload binaries to release
@@ -334,13 +328,9 @@ jobs:
         with:
           version: "0.13.0"
 
-      - name: Install cargo-binstall
-        if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
-        uses: cargo-bins/cargo-binstall@main
-
       - name: Install cargo zigbuild
         if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
-        run: cargo binstall -y cargo-zigbuild
+        run: cargo install --locked cargo-zigbuild
 
       - name: Cache bpf-linker
         uses: actions/cache@v4
@@ -369,7 +359,7 @@ jobs:
           if ! command -v bpf-linker &>/dev/null; then
             cargo install bpf-linker --git https://github.com/aya-rs/bpf-linker.git
           fi
-          cargo +nightly zigbuild --locked --profile prod-fast -p fault-cli --features stealth --target ${{ matrix.target }}
+          cargo zigbuild --locked --profile prod-fast -p fault-cli --features stealth --target ${{ matrix.target }}
           cargo +nightly build \
             --locked \
             --profile bpf \
