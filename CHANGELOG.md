@@ -1,5 +1,16 @@
 # Changes
 
+## [0.20.13] - 2026-06-08
+
+### Fixed
+
+- **CI: `aarch64-unknown-linux-musl` builds now work with Zig 0.14+** —
+  `mlugg/setup-zig@v2` pulls the latest Zig which dropped support for the
+  `--fix-cortex-a53-843419` linker flag. Rust emits this flag unconditionally
+  for all `aarch64` targets. Added `[target.aarch64-unknown-linux-musl]`
+  to `.cargo/config.toml` with `target-cpu=generic`, which uses a baseline
+  aarch64 profile and avoids emitting the errata workaround flag.
+
 ## [0.20.12] - 2026-06-01
 
 ### Fixed
