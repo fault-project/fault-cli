@@ -133,6 +133,7 @@ fn build_proxy_job(
     proxy_arg: String,
     http_mode: bool,
     verbose: bool,
+    http_upstream_override: Option<String>,
 ) -> Job {
     let log_level = if verbose { "debug" } else { "info" };
     let readiness_probe = Probe {
@@ -160,10 +161,11 @@ fn build_proxy_job(
         // HTTP CONNECT proxy mode:
         // - 0.0.0.0:proxy_port so Kubernetes Service traffic (arriving on the
         //   pod's non-loopback interface) reaches the proxy.
-        // - --upstream "*" so every host is faulted. Without this the
-        //   upstream_hosts list is empty, passthrough=true, and no faults are
-        //   ever applied.
-        vec![
+        // - --upstream "*" so every host is faulted.
+        // - --http-upstream-override so the proxy connects to the in-cluster
+        //   backend Service instead of following the request's Host header out
+        //   of the cluster (which would hit Cloudflare / external DNS).
+        let mut a = vec![
             "--log-stdout".into(),
             "--log-level".into(),
             log_level.into(),
@@ -173,7 +175,12 @@ fn build_proxy_job(
             format!("0.0.0.0:{}", proxy_port),
             "--upstream".into(),
             "*".into(),
-        ]
+        ];
+        if let Some(override_addr) = http_upstream_override {
+            a.push("--http-upstream-override".into());
+            a.push(override_addr);
+        }
+        a
     } else {
         vec![
             "--log-stdout".into(),
@@ -312,6 +319,14 @@ pub async fn inject_fault_proxy(
         cm_data,
     );
     let proxy_arg = format!("{}={}:{}", proxy_port, backend_name, orig_port);
+    // In HTTP mode, override the upstream so the proxy connects to the
+    // in-cluster backend Service rather than following the request's Host
+    // header out of the cluster.
+    let http_upstream = if http_mode {
+        Some(format!("{}:{}", backend_name, orig_port))
+    } else {
+        None
+    };
     let proxy_job = build_proxy_job(
         ns,
         &proxy_name,
@@ -323,6 +338,7 @@ pub async fn inject_fault_proxy(
         proxy_arg,
         http_mode,
         verbose,
+        http_upstream,
     );
 
     // Create the proxy
@@ -528,6 +544,7 @@ pub async fn inject_fault_proxy_standalone(
         proxy_arg,
         false,
         verbose,
+        None,
     );
 
     // Frontend ClusterIP Service — pods reach the proxy through this

@@ -49,6 +49,7 @@ async fn handle_new_connection(
         host_header,
         path,
         state.stealth,
+        state.http_upstream_override.load().as_deref().map(str::to_string),
     )
     .await
     {
@@ -208,7 +209,24 @@ async fn determine_upstream(
     host_header: Option<String>,
     path: String,
     stealth: bool,
+    upstream_override: Option<String>,
 ) -> Result<String, ProxyError> {
+    // When an upstream override is set, always connect there regardless of
+    // what the request says. The Host header is kept intact (set by the caller
+    // to the original upstream) so the backend pod accepts the request.
+    if let Some(override_addr) = upstream_override {
+        let has_scheme = override_addr.contains("://");
+        let base = if has_scheme {
+            override_addr.clone()
+        } else {
+            // infer scheme from port
+            let scheme =
+                if override_addr.ends_with(":443") { "https" } else { "http" };
+            format!("{}://{}", scheme, override_addr)
+        };
+        return Ok(format!("{}{}", base, path));
+    }
+
     let upstream = if let Some(auth) = authority {
         let mut scheme = scheme;
 

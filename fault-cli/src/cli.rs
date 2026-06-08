@@ -140,6 +140,22 @@ pub struct ProxyAwareCommandCommon {
     )]
     pub upstream_hosts: Vec<String>,
 
+    /// Override the upstream address the HTTP proxy connects to, regardless
+    /// of what the request's Host/authority says. The original Host header is
+    /// still forwarded so the backend accepts the request.
+    /// Format: [scheme://]host:port  e.g. my-api-backend:8080
+    /// Useful when running inside Kubernetes and the external hostname would
+    /// route outside the cluster — set this to the backend Service address to
+    /// keep traffic in-cluster.
+    #[arg(
+        help_heading = "Upstreams Options",
+        long = "http-upstream-override",
+        help = "Force HTTP proxy to connect to this address instead of the request's host.",
+        env = "FAULT_HTTP_UPSTREAM_OVERRIDE",
+        value_parser
+    )]
+    pub http_upstream_override: Option<String>,
+
     /// How long to run the proxy for
     /// If omitted, fraction-based times in DSL (like "5%") are disallowed.
     #[arg(

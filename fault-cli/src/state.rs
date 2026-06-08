@@ -27,6 +27,12 @@ pub async fn initialize_proxy_state(
 
     state.set_upstream_hosts(upstreams).await;
 
+    if let Some(ref override_addr) = cli.http_upstream_override {
+        state
+            .http_upstream_override
+            .store(Arc::new(Some(override_addr.clone())));
+    }
+
     Ok(Arc::new(state))
 }
 

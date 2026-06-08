@@ -21,6 +21,11 @@ pub struct ProxyState {
     pub upstream_hosts: Arc<ArcSwap<Vec<String>>>,
     pub rpc_manager: Arc<RwLock<RpcPluginManager>>,
     pub stealth: bool,
+    /// When set, the HTTP proxy ignores the request's Host/authority and
+    /// always connects to this address instead.  Scheme is inferred from the
+    /// port (443 → https, else http) unless explicitly provided.
+    /// Format: `[scheme://]host:port`  e.g. `my-api-backend:8080`
+    pub http_upstream_override: Arc<ArcSwap<Option<String>>>,
 }
 
 impl ProxyState {
@@ -35,6 +40,7 @@ impl ProxyState {
             upstream_hosts: Arc::new(ArcSwap::from_pointee(Vec::new())),
             rpc_manager: Arc::new(RwLock::new(RpcPluginManager::new())),
             stealth,
+            http_upstream_override: Arc::new(ArcSwap::from_pointee(None)),
         }
     }
 
