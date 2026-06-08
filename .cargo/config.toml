@@ -40,3 +40,12 @@ rustflags = [
    "-C", "symbol-mangling-version=v0",
    "-C", "link-arg=-Wl,--gc-sections",
 ]
+
+# aarch64 musl (static, cross-compiled via cargo-zigbuild in CI).
+# target-cpu=generic avoids emitting --fix-cortex-a53-843419 which Zig 0.14+
+# no longer accepts as a linker argument.
+[target.aarch64-unknown-linux-musl]
+rustflags = [
+   "-C", "target-cpu=generic",
+   "-C", "symbol-mangling-version=v0",
+]
