@@ -1,5 +1,31 @@
 # Changes
 
+## [0.20.12] - 2026-06-01
+
+### Fixed
+
+- **HTTP proxy mode: upstream always connects to backend Service, not external
+  hostname** — when `--with-http-response` is set in `fault inject kubernetes`,
+  the injected proxy pod previously derived the upstream address from the
+  request's `Host` header. Inside a Kubernetes cluster this resolves to the
+  external hostname, which routes outside the cluster — hitting Cloudflare or
+  other CDN/proxies that issue 301 redirects. Fault then modified the 301 into
+  the configured HTTP error, masking the real problem.
+
+  The proxy Job now receives `--http-upstream-override {service}-backend:{port}`
+  in HTTP mode, which forces all connections to the in-cluster backend Service
+  regardless of the request's `Host`. The `Host` header is still forwarded
+  correctly so the backend pod accepts the request.
+
+### Added
+
+- **`--http-upstream-override [scheme://]host:port` flag** (`fault run`) —
+  forces the HTTP CONNECT proxy to connect to the specified address for every
+  request, ignoring the request's Host/authority. Scheme is inferred from port
+  (443 → https, else http) when not provided. The original `Host` header is
+  preserved so the backend accepts the request normally. Env:
+  `FAULT_HTTP_UPSTREAM_OVERRIDE`.
+
 ## [0.20.11] - 2026-06-01
 
 ### Fixed
