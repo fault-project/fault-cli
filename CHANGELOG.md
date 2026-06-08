@@ -1,5 +1,15 @@
 # Changes
 
+## [0.20.14] - 2026-06-08
+
+### Fixed
+
+- **CI: pin Zig to 0.13.0 for `aarch64-unknown-linux-musl` builds** —
+  `mlugg/setup-zig@v2` was pulling Zig 0.16.0 which dropped support for
+  `--fix-cortex-a53-843419`. `cargo-zigbuild` does not yet filter this flag.
+  Pinning to `0.13.0` restores the previous working behaviour until
+  `cargo-zigbuild` adds the filter upstream.
+
 ## [0.20.13] - 2026-06-08
 
 ### Fixed
