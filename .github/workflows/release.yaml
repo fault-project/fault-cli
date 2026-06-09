@@ -191,8 +191,6 @@ jobs:
       - name: Install zig
         if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
         uses: mlugg/setup-zig@v2
-        with:
-          version: "0.13.0"
 
       - name: Install cargo zigbuild
         if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
@@ -208,41 +206,9 @@ jobs:
         run: cargo +nightly build --locked --profile ${{ matrix.profile }} --target ${{ matrix.target }}
         working-directory: ./fault-cli
 
-      - name: Build (static x86_64)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: cargo zigbuild --locked --profile ${{ matrix.profile }} --target ${{ matrix.target }}
-        working-directory: ./fault-cli
-
-      # Rust's aarch64-unknown-linux-musl target spec unconditionally injects
-      # -Wl,--fix-cortex-a53-843419 as a pre_link_arg which cannot be removed
-      # via RUSTFLAGS. Zig rejects this flag. cargo-zigbuild sets up a wrapper
-      # script as the linker; we run a first pass to discover that wrapper,
-      # then install our own wrapper that strips the bad flag and delegates to
-      # cargo-zigbuild's wrapper for all other args (preserving cross-compile
-      # target setup).
-      - name: Build (static aarch64)
-        if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: |
-          # Let cargo-zigbuild register its wrapper (exits quickly, no link step)
-          cargo zigbuild --locked --profile ${{ matrix.profile }} --target ${{ matrix.target }} 2>&1 || true
-          # Find the wrapper cargo-zigbuild created
-          ZIG_WRAPPER=$(find ~/.cache/cargo-zigbuild -name "zigcc-aarch64-unknown-linux-musl-*.sh" | head -1)
-          echo "Found zigbuild wrapper: $ZIG_WRAPPER"
-          # Install our filtering wrapper that delegates to zigbuild's wrapper
-          mkdir -p ~/.local/bin
-          cat > ~/.local/bin/zig-cc-aarch64-musl-filter <<EOF
-          #!/usr/bin/env bash
-          args=()
-          for arg in "\$@"; do
-            [[ "\$arg" == "-Wl,--fix-cortex-a53-843419" ]] && continue
-            args+=("\$arg")
-          done
-          exec "$ZIG_WRAPPER" "\${args[@]}"
-          EOF
-          chmod +x ~/.local/bin/zig-cc-aarch64-musl-filter
-          # Build with our filtering wrapper as the linker
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=~/.local/bin/zig-cc-aarch64-musl-filter \
-            cargo zigbuild --locked --profile ${{ matrix.profile }} --target ${{ matrix.target }}
+      - name: Build (static)
+        if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
+        run: cargo +nightly zigbuild --locked --profile ${{ matrix.profile }} --target ${{ matrix.target }}
         working-directory: ./fault-cli
 
       - name: Upload binaries to release
@@ -357,8 +323,6 @@ jobs:
       - name: Install zig
         if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
         uses: mlugg/setup-zig@v2
-        with:
-          version: "0.13.0"
 
       - name: Install cargo zigbuild
         if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
@@ -385,44 +349,13 @@ jobs:
             -Z build-std=core
         working-directory: .
 
-      - name: Build (static x86_64)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+      - name: Build (static)
+        if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
         run: |
           if ! command -v bpf-linker &>/dev/null; then
             cargo install bpf-linker --git https://github.com/aya-rs/bpf-linker.git
           fi
-          cargo zigbuild --locked --profile prod-fast -p fault-cli --features stealth --target ${{ matrix.target }}
-          cargo +nightly build \
-            --locked \
-            --profile bpf \
-            -p fault-ebpf-programs \
-            --target=bpfel-unknown-none \
-            -Z build-std=core
-        working-directory: .
-
-      - name: Build (static aarch64)
-        if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: |
-          if ! command -v bpf-linker &>/dev/null; then
-            cargo install bpf-linker --git https://github.com/aya-rs/bpf-linker.git
-          fi
-          # Discover cargo-zigbuild's wrapper, then install a filter wrapper
-          cargo zigbuild --locked --profile prod-fast -p fault-cli --features stealth --target ${{ matrix.target }} 2>&1 || true
-          ZIG_WRAPPER=$(find ~/.cache/cargo-zigbuild -name "zigcc-aarch64-unknown-linux-musl-*.sh" | head -1)
-          echo "Found zigbuild wrapper: $ZIG_WRAPPER"
-          mkdir -p ~/.local/bin
-          cat > ~/.local/bin/zig-cc-aarch64-musl-filter <<EOF
-          #!/usr/bin/env bash
-          args=()
-          for arg in "\$@"; do
-            [[ "\$arg" == "-Wl,--fix-cortex-a53-843419" ]] && continue
-            args+=("\$arg")
-          done
-          exec "$ZIG_WRAPPER" "\${args[@]}"
-          EOF
-          chmod +x ~/.local/bin/zig-cc-aarch64-musl-filter
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=~/.local/bin/zig-cc-aarch64-musl-filter \
-            cargo zigbuild --locked --profile prod-fast -p fault-cli --features stealth --target ${{ matrix.target }}
+          cargo +nightly zigbuild --locked --profile prod-fast -p fault-cli --features stealth --target ${{ matrix.target }}
           cargo +nightly build \
             --locked \
             --profile bpf \

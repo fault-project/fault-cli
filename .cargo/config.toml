@@ -40,5 +40,3 @@ rustflags = [
    "-C", "symbol-mangling-version=v0",
    "-C", "link-arg=-Wl,--gc-sections",
 ]
-
-

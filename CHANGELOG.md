@@ -1,5 +1,16 @@
 # Changes
 
+## [0.20.18] - 2026-06-09
+
+### Reverted
+
+- **CI: revert all aarch64-musl workaround attempts** — none of them worked
+  and they layered complexity on top of a moving upstream target. Restored
+  the unified `Build (static)` step from before the fix-spiral. Kept the
+  speedups that don't break anything: bpf-linker cache, dropped
+  `rustup update nightly`, removed `cargo-binstall` (which itself caused
+  `cargo +nightly zigbuild` to fail with "no such command").
+
 ## [0.20.17] - 2026-06-09
 
 ### Fixed
