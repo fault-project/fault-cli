@@ -1,5 +1,17 @@
 # Changes
 
+## [0.20.17] - 2026-06-09
+
+### Fixed
+
+- **CI: aarch64-musl linker wrapper now delegates to cargo-zigbuild's own
+  wrapper** — the previous approach called `zig cc` directly which broke
+  cross-compilation (ld.lld treated objects as x86_64). The new approach runs
+  `cargo zigbuild` once to let it generate its own wrapper script, discovers
+  that wrapper, then installs a filter wrapper that strips
+  `--fix-cortex-a53-843419` and delegates all other args to cargo-zigbuild's
+  wrapper (preserving full cross-compilation setup).
+
 ## [0.20.16] - 2026-06-08
 
 ### Fixed
