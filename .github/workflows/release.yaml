@@ -198,6 +198,26 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
         run: cargo install --locked cargo-zigbuild
 
+      # Rust's aarch64-unknown-linux-musl target spec unconditionally adds
+      # -Wl,--fix-cortex-a53-843419 as a pre_link_arg. Zig does not support
+      # this flag. Work around it by installing a thin zig-cc wrapper that
+      # strips the flag before forwarding to the real zig cc.
+      - name: Install zig-cc cortex-a53 workaround wrapper
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: |
+          mkdir -p ~/.local/bin
+          cat > ~/.local/bin/zig-cc-aarch64-musl <<'EOF'
+          #!/usr/bin/env bash
+          args=()
+          for arg in "$@"; do
+            [[ "$arg" == "-Wl,--fix-cortex-a53-843419" ]] && continue
+            args+=("$arg")
+          done
+          exec zig cc "${args[@]}"
+          EOF
+          chmod +x ~/.local/bin/zig-cc-aarch64-musl
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
       - name: Build Linux/MacOSX (shared)
         if: matrix.os != 'windows-latest' && matrix.target != 'x86_64-unknown-linux-musl' && matrix.target != 'aarch64-unknown-linux-musl'
         run: cargo +nightly build --locked --profile ${{ matrix.profile }} --features agent --target ${{ matrix.target }}
@@ -209,7 +229,14 @@ jobs:
         working-directory: ./fault-cli
 
       - name: Build (static)
-        if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: cargo zigbuild --locked --profile ${{ matrix.profile }} --target ${{ matrix.target }}
+        working-directory: ./fault-cli
+
+      - name: Build (static aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: zig-cc-aarch64-musl
         run: cargo zigbuild --locked --profile ${{ matrix.profile }} --target ${{ matrix.target }}
         working-directory: ./fault-cli
 
@@ -332,6 +359,22 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
         run: cargo install --locked cargo-zigbuild
 
+      - name: Install zig-cc cortex-a53 workaround wrapper
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: |
+          mkdir -p ~/.local/bin
+          cat > ~/.local/bin/zig-cc-aarch64-musl <<'EOF'
+          #!/usr/bin/env bash
+          args=()
+          for arg in "$@"; do
+            [[ "$arg" == "-Wl,--fix-cortex-a53-843419" ]] && continue
+            args+=("$arg")
+          done
+          exec zig cc "${args[@]}"
+          EOF
+          chmod +x ~/.local/bin/zig-cc-aarch64-musl
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
       - name: Cache bpf-linker
         uses: actions/cache@v4
         with:
@@ -353,8 +396,25 @@ jobs:
             -Z build-std=core
         working-directory: .
 
-      - name: Build (static)
-        if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'
+      - name: Build (static x86_64)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          if ! command -v bpf-linker &>/dev/null; then
+            cargo install bpf-linker --git https://github.com/aya-rs/bpf-linker.git
+          fi
+          cargo zigbuild --locked --profile prod-fast -p fault-cli --features stealth --target ${{ matrix.target }}
+          cargo +nightly build \
+            --locked \
+            --profile bpf \
+            -p fault-ebpf-programs \
+            --target=bpfel-unknown-none \
+            -Z build-std=core
+        working-directory: .
+
+      - name: Build (static aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: zig-cc-aarch64-musl
         run: |
           if ! command -v bpf-linker &>/dev/null; then
             cargo install bpf-linker --git https://github.com/aya-rs/bpf-linker.git

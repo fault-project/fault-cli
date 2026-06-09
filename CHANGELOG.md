@@ -1,5 +1,18 @@
 # Changes
 
+## [0.20.16] - 2026-06-08
+
+### Fixed
+
+- **CI: strip `--fix-cortex-a53-843419` via zig-cc wrapper for aarch64-musl**
+  — Rust's `aarch64-unknown-linux-musl` target spec unconditionally injects
+  `-Wl,--fix-cortex-a53-843419` as a `pre_link_arg`, which cannot be removed
+  via `RUSTFLAGS`. Zig does not support this flag regardless of version.
+  A thin shell wrapper `zig-cc-aarch64-musl` is now installed before the
+  build step; it strips the flag and forwards everything else to `zig cc`.
+  `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER` points cargo at this
+  wrapper for the aarch64-musl build steps.
+
 ## [0.20.15] - 2026-06-08
 
 ### Fixed
