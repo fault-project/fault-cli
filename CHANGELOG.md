@@ -1,5 +1,16 @@
 # Changes
 
+## [0.20.24] - 2026-06-09
+
+### Fixed
+
+- **Service selector not patched until proxy pod is Ready** — previously the
+  original Service's selector was patched immediately after the proxy Job was
+  created, while the pod was still pulling its image or initialising. Incoming
+  traffic was redirected to a pod that wasn't ready, causing requests to fail
+  during the startup window. The injection now waits up to 120 seconds for the
+  proxy pod's `Ready` condition to be `True` before patching the selector.
+
 ## [0.20.23] - 2026-06-09
 
 ### Fixed

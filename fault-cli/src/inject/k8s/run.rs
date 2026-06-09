@@ -267,6 +267,60 @@ fn build_proxy_job(
     }
 }
 
+/// Block until the proxy pod (identified by `app=<proxy_name>` label) is
+/// Running and its Ready condition is True, or until a 60-second timeout.
+async fn wait_for_proxy_ready(
+    client: Client,
+    ns: &str,
+    proxy_name: &str,
+) -> Result<()> {
+    use std::time::Duration;
+    use std::time::Instant;
+
+    let pods_api: Api<k8s_openapi::api::core::v1::Pod> =
+        Api::namespaced(client, ns);
+    let start = Instant::now();
+    let timeout = Duration::from_secs(120);
+    let interval = Duration::from_millis(500);
+
+    tracing::info!("Waiting for proxy pod '{}' to be ready...", proxy_name);
+
+    loop {
+        let lp = kube::api::ListParams::default()
+            .labels(&format!("app={}", proxy_name));
+        let pod_list = pods_api.list(&lp).await?;
+
+        for pod in pod_list.items.iter() {
+            if let Some(status) = pod.status.as_ref() {
+                if status.phase.as_deref() == Some("Running") {
+                    if let Some(conds) = status.conditions.as_ref() {
+                        if conds
+                            .iter()
+                            .any(|c| c.type_ == "Ready" && c.status == "True")
+                        {
+                            tracing::info!(
+                                "Proxy pod '{}' is ready.",
+                                proxy_name
+                            );
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+
+        if start.elapsed() > timeout {
+            anyhow::bail!(
+                "Timed out waiting for proxy pod '{}' to become Ready. \
+                 The Service selector will not be patched.",
+                proxy_name
+            );
+        }
+
+        tokio::time::sleep(interval).await;
+    }
+}
+
 /// Returns true when the fault settings include an HTTP error fault, meaning
 /// the proxy must run in HTTP CONNECT mode rather than TCP mode.
 fn is_http_fault_mode(fault_settings: &BTreeMap<String, String>) -> bool {
@@ -348,6 +402,11 @@ pub async fn inject_fault_proxy(
         .await?;
     Api::<ConfigMap>::namespaced(client.clone(), ns).create(&pp, &cm).await?;
     Api::<Job>::namespaced(client.clone(), ns).create(&pp, &proxy_job).await?;
+
+    // Wait for the proxy pod to be Ready before patching the Service selector.
+    // Without this, traffic is redirected to the proxy while it is still
+    // starting up (image pull, init), causing requests to fail.
+    wait_for_proxy_ready(client.clone(), ns, &proxy_name).await?;
 
     // Patch the original Service's selector to point at our proxy
     let svc_api: Api<Service> = Api::namespaced(client.clone(), ns);
