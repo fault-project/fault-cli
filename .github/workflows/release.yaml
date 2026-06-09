@@ -150,9 +150,9 @@ jobs:
 
       - run: |
          rustup target add ${{ matrix.target }}
-         rustup toolchain install nightly --component rust-src -t ${{ matrix.target }}
-         rustup update nightly
-         rustup override set nightly
+         rustup toolchain install nightly-2026-06-04 --component rust-src -t ${{ matrix.target }}
+         
+         rustup override set nightly-2026-06-04
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -299,9 +299,9 @@ jobs:
 
       - run: |
          rustup target add ${{ matrix.target }}
-         rustup toolchain install nightly --component rust-src -t ${{ matrix.target }}
-         rustup update nightly
-         rustup override set nightly
+         rustup toolchain install nightly-2026-06-04 --component rust-src -t ${{ matrix.target }}
+         
+         rustup override set nightly-2026-06-04
 
       - uses: Swatinem/rust-cache@v2
         with:
