@@ -1,5 +1,14 @@
 # Changes
 
+## [0.20.23] - 2026-06-09
+
+### Fixed
+
+- **`--duration` now propagated to the injected proxy container** — previously
+  `--duration 60s` only controlled how long the CLI waited before rolling back;
+  the proxy Job ran indefinitely. `FAULT_PROXY_DURATION` is now inserted into
+  the ConfigMap so the proxy container self-terminates after the specified time.
+
 ## [0.20.22] - 2026-06-09
 
 ### Fixed

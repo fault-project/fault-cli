@@ -903,7 +903,13 @@ async fn main() -> Result<()> {
         #[cfg(feature = "injection")]
         Commands::Inject { inject } => match inject {
             cli::FaultInjectionCommands::Kubernetes(cfg) => {
-                let fault_settings = cfg.options.to_environment_variables();
+                let mut fault_settings = cfg.options.to_environment_variables();
+                // Pass --duration to the proxy container via the ConfigMap so
+                // it self-terminates after the specified time.
+                if let Some(ref d) = cfg.duration {
+                    fault_settings
+                        .insert("FAULT_PROXY_DURATION".to_string(), d.clone());
+                }
                 let env_overrides =
                     inject::k8s::env_override::parse_env_overrides(
                         &cfg.env_overrides,
